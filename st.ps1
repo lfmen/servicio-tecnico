@@ -5,7 +5,7 @@ $Base = 'C:\ServicioTecnico'
 $OfficeDir = 'C:\Office'
 
 # --- relanzar como administrador (sin cerrar la ventana si falla) ---
-$admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole('Administrator')
+$admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $admin) {
     try {
         if ($PSCommandPath) {
@@ -14,7 +14,7 @@ if (-not $admin) {
             Start-Process powershell -Verb RunAs -ArgumentList "-NoExit -NoProfile -ExecutionPolicy Bypass -Command `"[Net.ServicePointManager]::SecurityProtocol=3072; irm $Url`?t=$(Get-Date -f yyyyMMddHHmmss) | iex`""
         }
     } catch {
-        Write-Host 'no se pudo pedir permisos de administrador. abri powershell como administrador y volve a pegar el comando.' -ForegroundColor Red
+        Write-Host ("no se pudo pedir permisos de administrador: {0}" -f $_.Exception.Message) -ForegroundColor Red
     }
     return
 }
