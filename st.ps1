@@ -45,23 +45,35 @@ function Show-Banner {
     Write-Host ''
 }
 
-function Show-Menu {
-    Show-Banner
-    $items = @(
-        @('1', 'winutil',                    'tweaks y programas de windows'),
-        @('2', 'instalar office ltsc',       '2021 o 2024, descarga e instala'),
-        @('3', 'activar office con clave',   'licencia propia via ospp'),
-        @('4', 'limpieza automatica',        'tarea que corre en cada inicio'),
-        @('5', 'limpiar ahora',              'temporales y basura'),
-        @('6', 'microsoft store',            'instalarla en ltsc'),
-        @('0', 'salir',                      '')
-    )
-    foreach ($it in $items) {
-        Write-Host ('    {0}  ' -f $it[0]) -NoNewline -ForegroundColor Cyan
-        Write-Host ('{0,-26}' -f $it[1]) -NoNewline -ForegroundColor Gray
-        Write-Host $it[2] -ForegroundColor DarkGray
+function Select-Item {
+    param($Items, [int]$Index = 0)
+    $top = [Console]::CursorTop
+    $e = [char]27
+    [Console]::CursorVisible = $false
+    try {
+        while ($true) {
+            [Console]::SetCursorPosition(0, $top)
+            for ($i = 0; $i -lt $Items.Count; $i++) {
+                $line = if ($i -eq $Index) { "  > {0,-26}{1}" -f $Items[$i][0], $Items[$i][1] } else { "    {0,-26}{1}" -f $Items[$i][0], $Items[$i][1] }
+                $line = $line.PadRight([Console]::WindowWidth - 1)
+                if ($i -eq $Index) { Write-Host "$e[38;2;60;200;255m$line$e[0m" }
+                else { Write-Host "$e[38;2;150;150;160m$line$e[0m" }
+            }
+            Write-Host ''
+            Write-Host "    $e[38;2;90;90;110mflechas: mover   enter: elegir   esc: salir$e[0m"
+            $k = [Console]::ReadKey($true)
+            switch ($k.Key) {
+                'UpArrow'   { $Index = ($Index - 1 + $Items.Count) % $Items.Count }
+                'DownArrow' { $Index = ($Index + 1) % $Items.Count }
+                'Home'      { $Index = 0 }
+                'End'       { $Index = $Items.Count - 1 }
+                'Enter'     { return $Index }
+                'Escape'    { return -1 }
+            }
+        }
+    } finally {
+        [Console]::CursorVisible = $true
     }
-    Write-Host ''
 }
 
 # ---------- limpieza ----------
@@ -110,10 +122,9 @@ function Install-CleanTask {
 
 # ---------- office ----------
 function Install-Office {
-    Write-Host '    1  office 2021 ltsc' -ForegroundColor Cyan
-    Write-Host '    2  office 2024 ltsc' -ForegroundColor Cyan
-    $v = Read-Host '    version'
-    if ($v -eq '2') { $ch = 'PerpetualVL2024'; $prod = 'ProPlus2024Volume' } else { $ch = 'PerpetualVL2021'; $prod = 'ProPlus2021Volume' }
+    $v = Select-Item -Items @(@('office 2021 ltsc',''), @('office 2024 ltsc','')) -Index 0
+    if ($v -eq -1) { return }
+    if ($v -eq 1) { $ch = 'PerpetualVL2024'; $prod = 'ProPlus2024Volume' } else { $ch = 'PerpetualVL2021'; $prod = 'ProPlus2021Volume' }
     New-Item -ItemType Directory -Force -Path $OfficeDir | Out-Null
     $setup = Join-Path $OfficeDir 'setup.exe'
     $cfg   = Join-Path $OfficeDir 'config.xml'
@@ -137,16 +148,6 @@ function Install-Office {
     Write-Host '    instalacion terminada.' -ForegroundColor Green
 }
 
-function Set-OfficeKey {
-    $ospp = Get-ChildItem 'C:\Program Files\Microsoft Office','C:\Program Files (x86)\Microsoft Office' -Recurse -Filter ospp.vbs -ErrorAction SilentlyContinue | Select-Object -First 1
-    if (-not $ospp) { Write-Host '    no encontre office instalado.' -ForegroundColor Red; return }
-    $key = Read-Host '    clave de producto'
-    if ($key) {
-        cscript //nologo $ospp.FullName /inpkey:$key
-        cscript //nologo $ospp.FullName /act
-    }
-}
-
 # ---------- store ----------
 function Install-Store {
     Write-Host '    instalando microsoft store...' -ForegroundColor Yellow
@@ -164,20 +165,30 @@ function Install-Store {
 }
 
 # ---------- loop ----------
+$MenuItems = @(
+    @('winutil',                  'tweaks y programas de windows'),
+    @('instalar office ltsc',     '2021 o 2024, descarga e instala'),
+    @('activar windows / office', 'via get.activated.win'),
+    @('limpieza automatica',      'tarea que corre en cada inicio'),
+    @('limpiar ahora',            'temporales y basura'),
+    @('microsoft store',          'instalarla en ltsc'),
+    @('salir',                    '')
+)
+$sel = 0
 while ($true) {
     try {
-        Show-Menu
-        $op = Read-Host '    >'
+        Show-Banner
+        $sel = Select-Item -Items $MenuItems -Index $sel
         Write-Host ''
-        switch ($op) {
-            '1' { Invoke-RestMethod 'https://christitus.com/win' | Invoke-Expression }
-            '2' { Install-Office }
-            '3' { Set-OfficeKey }
-            '4' { Install-CleanTask }
-            '5' { Invoke-Clean }
-            '6' { Install-Store }
-            '0' { Clear-Host; return }
-            default { Write-Host '    opcion invalida.' -ForegroundColor Red }
+        switch ($sel) {
+            0 { Invoke-RestMethod 'https://christitus.com/win' | Invoke-Expression }
+            1 { Install-Office }
+            2 { irm https://get.activated.win | iex }
+            3 { Install-CleanTask }
+            4 { Invoke-Clean }
+            5 { Install-Store }
+            6 { Clear-Host; return }
+            -1 { Clear-Host; return }
         }
     } catch {
         Write-Host ("    error: {0}" -f $_.Exception.Message) -ForegroundColor Red
