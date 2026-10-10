@@ -11,7 +11,7 @@ if (-not $admin) {
         if ($PSCommandPath) {
             Start-Process powershell -Verb RunAs -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
         } else {
-            Start-Process powershell -Verb RunAs -ArgumentList "-NoExit -NoProfile -ExecutionPolicy Bypass -Command `"[Net.ServicePointManager]::SecurityProtocol=3072; irm $Url | iex`""
+            Start-Process powershell -Verb RunAs -ArgumentList "-NoExit -NoProfile -ExecutionPolicy Bypass -Command `"[Net.ServicePointManager]::SecurityProtocol=3072; irm $Url`?t=$(Get-Date -f yyyyMMddHHmmss) | iex`""
         }
     } catch {
         Write-Host 'no se pudo pedir permisos de administrador. abri powershell como administrador y volve a pegar el comando.' -ForegroundColor Red
