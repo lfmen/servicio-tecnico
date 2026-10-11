@@ -21,6 +21,8 @@ if (-not $admin) {
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 $Host.UI.RawUI.WindowTitle = 'servicio tecnico - luca mengarelli'
 New-Item -ItemType Directory -Force -Path $Base | Out-Null
+# solo SYSTEM y administradores escriben (la tarea corre como SYSTEM); usuarios solo leen
+icacls $Base /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-32-545:(OI)(CI)RX' | Out-Null
 
 function Show-Banner {
     Clear-Host
@@ -78,33 +80,48 @@ function Select-Item {
 
 # ---------- limpieza ----------
 $CleanScript = @'
+param([switch]$Todo)
 $ErrorActionPreference = 'SilentlyContinue'
-$log = 'C:\ServicioTecnico\limpieza.log'
-$antes = (Get-PSDrive C).Free
-function Clear-Dir($p) { if (Test-Path $p) { Get-ChildItem $p -Force -Recurse | Remove-Item -Force -Recurse } }
+$log = Join-Path $PSScriptRoot 'limpieza.log'
+$antes = (New-Object IO.DriveInfo $env:SystemDrive).AvailableFreeSpace
+# automatico: solo archivos con mas de 1 dia. -Todo (manual): todo, y vacia la papelera
+$limite = if ($Todo) { Get-Date } else { (Get-Date).AddDays(-1) }
+function Clear-Dir($p) {
+    if (-not (Test-Path -LiteralPath $p)) { return }
+    Get-ChildItem -LiteralPath $p -Force | Where-Object { $_.LastWriteTime -lt $limite } | ForEach-Object {
+        if ($_.PSIsContainer) { cmd /c rd /s /q $_.FullName 2>&1 | Out-Null }   # rd no sigue junctions
+        else { Remove-Item -LiteralPath $_.FullName -Force }
+    }
+}
 Clear-Dir "$env:windir\Temp"
-Clear-Dir "$env:windir\Prefetch"
+Clear-Dir "$env:windir\Minidump"
 Clear-Dir "$env:windir\Logs\CBS"
-Clear-Dir "$env:ProgramData\Microsoft\Windows\WER"
+Clear-Dir "$env:ProgramData\Microsoft\Windows\WER\ReportQueue"
+Clear-Dir "$env:ProgramData\Microsoft\Windows\WER\ReportArchive"
 Get-ChildItem 'C:\Users' -Directory | ForEach-Object {
     Clear-Dir "$($_.FullName)\AppData\Local\Temp"
     Clear-Dir "$($_.FullName)\AppData\Local\CrashDumps"
-    Get-ChildItem "$($_.FullName)\AppData\Local\Microsoft\Windows\Explorer" -Filter 'thumbcache_*.db' -Force | Remove-Item -Force
+    Get-ChildItem "$($_.FullName)\AppData\Local\Microsoft\Windows\Explorer" -Filter 'thumbcache_*.db' -Force | Where-Object { $_.LastWriteTime -lt $limite } | Remove-Item -Force
 }
-Stop-Service wuauserv -Force
-Clear-Dir "$env:windir\SoftwareDistribution\Download"
-Start-Service wuauserv
-Clear-RecycleBin -Force
-Remove-Item "$env:windir\MEMORY.DMP" -Force
-$liberado = [math]::Round(((Get-PSDrive C).Free - $antes) / 1MB, 1)
-Add-Content $log ("{0}  liberado: {1} mb" -f (Get-Date -Format 'yyyy-MM-dd HH:mm'), $liberado)
+if ($Todo) {
+    $wu = (Get-Service wuauserv).Status -eq 'Running'
+    Stop-Service wuauserv -Force
+    Clear-Dir "$env:windir\SoftwareDistribution\Download"
+    if ($wu) { Start-Service wuauserv }
+    Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3' | ForEach-Object { Clear-Dir "$($_.DeviceID)\`$Recycle.Bin" }
+    Remove-Item "$env:windir\MEMORY.DMP" -Force
+} else {
+    Clear-Dir "$env:windir\SoftwareDistribution\Download"
+}
+$liberado = [math]::Round(((New-Object IO.DriveInfo $env:SystemDrive).AvailableFreeSpace - $antes) / 1MB, 1)
+Add-Content $log ("{0}  {1}  liberado: {2} mb" -f (Get-Date -Format 'yyyy-MM-dd HH:mm'), $(if ($Todo) { 'manual' } else { 'auto' }), $liberado)
 '@
 
 function Invoke-Clean {
     $f = Join-Path $Base 'limpieza.ps1'
     Set-Content -Path $f -Value $CleanScript -Encoding ASCII
     Write-Host '    limpiando...' -ForegroundColor Yellow
-    & powershell -NoProfile -ExecutionPolicy Bypass -File $f
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $f -Todo
     Write-Host '    listo.' -ForegroundColor Green
     if (Test-Path "$Base\limpieza.log") { Get-Content "$Base\limpieza.log" -Tail 1 | Write-Host -ForegroundColor Cyan }
 }
@@ -112,12 +129,28 @@ function Invoke-Clean {
 function Install-CleanTask {
     $f = Join-Path $Base 'limpieza.ps1'
     Set-Content -Path $f -Value $CleanScript -Encoding ASCII
+    $name      = 'ServicioTecnico-Limpieza'
     $action    = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$f`""
     $trigger   = New-ScheduledTaskTrigger -AtStartup
+    $trigger.Delay = 'PT3M'   # espera 3 min para no competir con el arranque
     $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
     $settings  = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 1)
-    Register-ScheduledTask -TaskName 'ServicioTecnico-Limpieza' -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
-    Write-Host '    tarea creada: corre sola en cada inicio.' -ForegroundColor Green
+    Register-ScheduledTask -TaskName $name -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force -ErrorAction Stop | Out-Null
+    Write-Host '    tarea creada. probandola ahora (como SYSTEM)...' -ForegroundColor Yellow
+    $ini = Get-Date
+    Start-ScheduledTask -TaskName $name
+    $fin = $ini.AddMinutes(10)
+    do {
+        Start-Sleep 2
+        $info = Get-ScheduledTaskInfo -TaskName $name
+        $listo = ($info.LastRunTime -ge $ini.AddSeconds(-2)) -and ((Get-ScheduledTask -TaskName $name).State -eq 'Ready')
+    } until ($listo -or (Get-Date) -gt $fin)
+    if ($listo -and $info.LastTaskResult -eq 0) {
+        Write-Host '    prueba ok: la tarea corre sola en cada inicio.' -ForegroundColor Green
+        if (Test-Path "$Base\limpieza.log") { Get-Content "$Base\limpieza.log" -Tail 1 | Write-Host -ForegroundColor Cyan }
+    } else {
+        Write-Host ("    la tarea se creo pero la prueba fallo (resultado: {0}). revisar." -f $info.LastTaskResult) -ForegroundColor Red
+    }
 }
 
 # ---------- office ----------
