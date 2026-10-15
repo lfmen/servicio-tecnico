@@ -31,31 +31,38 @@ icacls $Base /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(C
 function U([string]$s) { [regex]::Unescape($s) }
 $e = [char]27
 function Rgb($cr, $cg, $cb) { "$e[38;2;$cr;$cg;${cb}m" }
-$RST    = "$e[0m"
+function BgRgb($cr, $cg, $cb) { "$e[48;2;$cr;$cg;${cb}m" }
+
+# windows powershell arranca con fondo azul y ESC[0m vuelve a ese azul: se fuerza el negro de la paleta
+$OrigBg = $Host.UI.RawUI.BackgroundColor; $OrigFg = $Host.UI.RawUI.ForegroundColor
+$BGDEF  = if ($OrigBg -ne 'Black') { "$e[40m" } else { "$e[49m" }
+$Host.UI.RawUI.BackgroundColor = 'Black'; $Host.UI.RawUI.ForegroundColor = 'Gray'
+try { $Host.PrivateData.ProgressBackgroundColor = 'Black'; $Host.PrivateData.ProgressForegroundColor = 'Gray' } catch {}
+
+$RST    = "$e[0m$BGDEF"
 $BOLD   = "$e[1m"
-$BGSEL  = "$e[48;2;24;28;38m"
-$BGKEY  = "$e[48;2;40;42;50m$(Rgb 230 230 235)"
-$cAcc   = Rgb 91 155 255
+$BGSEL  = BgRgb 22 27 40
+$BGKEY  = (BgRgb 36 38 48) + (Rgb 225 225 232)
+$cAcc   = Rgb 88 170 255
 $cWhi   = Rgb 245 245 247
 $cTxt   = Rgb 214 214 220
-$cMut   = Rgb 138 138 148
-$cDim   = Rgb 82 82 92
-$cLine  = Rgb 44 44 52
+$cMut   = Rgb 138 138 150
+$cDim   = Rgb 84 86 100
+$cLine  = Rgb 64 68 86
 $cOk    = Rgb 61 220 151
 $cWarn  = Rgb 245 184 65
 $cBad   = Rgb 255 92 92
-$gDot  = [string][char]0x25CF; $gEdge = [string][char]0x258C; $gLine = [string][char]0x2500
-$gHeavy = [string][char]0x2501; $gStep = [string][char]0x203A; $gTri = [string][char]0x25B2
-$gX    = [string][char]0x00D7; $gUp = [string][char]0x2191; $gDn = [string][char]0x2193
-$gSep  = [string][char]0x00B7
-$MG    = '   '
-$Brand = U 'Servicio T\u00e9cnico'
+$gDot   = [string][char]0x25CF; $gEdge = [string][char]0x258C; $gLine = [string][char]0x2500
+$gHeavy = [string][char]0x2501; $gStep = [string][char]0x203A; $gTri  = [string][char]0x25B2
+$gX     = [string][char]0x00D7; $gUp   = [string][char]0x2191; $gDn   = [string][char]0x2193
+$gLeft  = [string][char]0x2190; $gRight = [string][char]0x2192; $gSep = [string][char]0x00B7
+$gTL    = [string][char]0x256D; $gTR   = [string][char]0x256E; $gBL   = [string][char]0x2570
+$gBR    = [string][char]0x256F; $gV    = [string][char]0x2502; $gPlay = [string][char]0x25B8
+$gTop   = [string][char]0x2580; $gBot  = [string][char]0x2584; $gRing = [string][char]0x25CB
+$MG     = '   '
+$CW     = 92
+$Brand  = U 'Servicio T\u00e9cnico'
 $Host.UI.RawUI.WindowTitle = "$Brand $gSep Luca Mengarelli"
-
-# fondo negro en vez del azul de windows powershell; se restaura al salir
-$OrigBg = $Host.UI.RawUI.BackgroundColor; $OrigFg = $Host.UI.RawUI.ForegroundColor
-$Host.UI.RawUI.BackgroundColor = 'Black'; $Host.UI.RawUI.ForegroundColor = 'Gray'
-try { $Host.PrivateData.ProgressBackgroundColor = 'Black'; $Host.PrivateData.ProgressForegroundColor = 'Gray' } catch {}
 
 function Say($color, $mark, $text) { Write-Host "$MG$color$mark$RST $cTxt$text$RST" }
 function Step($t) { Say $cAcc $gStep $t }
@@ -82,34 +89,169 @@ function Confirm-Action($q) {
     $y
 }
 
-# ---------- datos del equipo ----------
+# barra indeterminada: un segmento que va y viene
+function Get-Loader([int]$i, [int]$w = 16) {
+    $seg = 4; $span = $w - $seg
+    $p = $i % (2 * $span); if ($p -gt $span) { $p = 2 * $span - $p }
+    "$cLine$($gHeavy * $p)$cAcc$($gHeavy * $seg)$cLine$($gHeavy * ($span - $p))$RST"
+}
+
+# ---------- logo ----------
+# tipografia de 5x7 pixeles; cada caracter de consola dibuja 2 pixeles con medio bloque, asi quedan cuadrados
+$Font = @{
+    'L' = '#....', '#....', '#....', '#....', '#....', '#....', '#####'
+    'U' = '#...#', '#...#', '#...#', '#...#', '#...#', '#...#', '.###.'
+    'C' = '.####', '#....', '#....', '#....', '#....', '#....', '.####'
+    'A' = '.###.', '#...#', '#...#', '#####', '#...#', '#...#', '#...#'
+    'M' = '#.....#', '##...##', '#.#.#.#', '#..#..#', '#.....#', '#.....#', '#.....#'
+    'E' = '#####', '#....', '#....', '####.', '#....', '#....', '#####'
+    'N' = '#....#', '##...#', '#.#..#', '#..#.#', '#...##', '#....#', '#....#'
+    'G' = '.####', '#....', '#....', '#..##', '#...#', '#...#', '.###.'
+    'R' = '####.', '#...#', '#...#', '####.', '#.#..', '#..#.', '#...#'
+    'I' = '###', '.#.', '.#.', '.#.', '.#.', '.#.', '###'
+    ' ' = '...', '...', '...', '...', '...', '...', '...'
+}
+$Grad = @(@(62, 242, 192), @(58, 160, 255), @(170, 110, 255))
+
+function Get-GradColor([double]$t) {
+    $t = [math]::Max(0, [math]::Min(1, $t)) * ($Grad.Count - 1)
+    $i = [math]::Min([int][math]::Floor($t), $Grad.Count - 2); $f = $t - $i
+    $a = $Grad[$i]; $z = $Grad[$i + 1]
+    , @(($a[0] + ($z[0] - $a[0]) * $f), ($a[1] + ($z[1] - $a[1]) * $f), ($a[2] + ($z[2] - $a[2]) * $f))
+}
+
+# precalcula el color de cada pixel: letra con degrade (mas clara arriba) y sombra 3d abajo a la derecha
+function Initialize-Logo([string]$text) {
+    $rows = for ($y = 0; $y -lt 7; $y++) { ($text.ToCharArray() | ForEach-Object { $Font[[string]$_][$y] }) -join '.' }
+    $w = $rows[0].Length
+    $script:LogoW = $w + 1
+    $script:LogoPx = @(); $script:LogoOn = @()
+    for ($y = 0; $y -lt 8; $y++) {
+        $px = New-Object object[] ($w + 1); $lit = New-Object bool[] ($w + 1)
+        for ($x = 0; $x -le $w; $x++) {
+            $isOn = $y -lt 7 -and $x -lt $w -and $rows[$y][$x] -eq '#'
+            if ($isOn) {
+                $c = Get-GradColor ($x / ($w - 1)); $k = (1 - $y / 6) * .25
+                $px[$x] = @(($c[0] + (255 - $c[0]) * $k), ($c[1] + (255 - $c[1]) * $k), ($c[2] + (255 - $c[2]) * $k)); $lit[$x] = $true
+            } elseif ($x -ge 1 -and $y -ge 1 -and $rows[$y - 1][$x - 1] -eq '#') {
+                $c = Get-GradColor (($x - 1) / ($w - 1))
+                $px[$x] = @(($c[0] * .2), ($c[1] * .2), ($c[2] * .3))
+            }
+        }
+        $script:LogoPx += , $px; $script:LogoOn += , $lit
+    }
+}
+
+# 4 lineas de texto; $shine es la columna del brillo que barre, $reveal hasta donde se ve
+function Get-Logo([double]$shine = -99, [int]$reveal = 9999) {
+    for ($row = 0; $row -lt 4; $row++) {
+        $sb = New-Object Text.StringBuilder
+        [void]$sb.Append($MG)
+        for ($x = 0; $x -lt $LogoW; $x++) {
+            $pp = @($null, $null)
+            for ($h = 0; $h -lt 2; $h++) {
+                $y = 2 * $row + $h
+                $c = $LogoPx[$y][$x]
+                if ($null -eq $c -or $x -gt $reveal) { continue }
+                if ($LogoOn[$y][$x]) {
+                    $d = [math]::Abs($x - $shine + $y * .7)
+                    if ($d -lt 3) { $k = (1 - $d / 3) * .9; $c = @(($c[0] + (255 - $c[0]) * $k), ($c[1] + (255 - $c[1]) * $k), ($c[2] + (255 - $c[2]) * $k)) }
+                }
+                $pp[$h] = '{0};{1};{2}' -f [int]$c[0], [int]$c[1], [int]$c[2]
+            }
+            if (-not $pp[0] -and -not $pp[1]) { [void]$sb.Append("$BGDEF ") }
+            elseif (-not $pp[1]) { [void]$sb.Append("$BGDEF$e[38;2;$($pp[0])m$gTop") }
+            elseif (-not $pp[0]) { [void]$sb.Append("$BGDEF$e[38;2;$($pp[1])m$gBot") }
+            else { [void]$sb.Append("$e[38;2;$($pp[0]);48;2;$($pp[1])m$gTop") }
+        }
+        $sb.Append($RST).ToString()
+    }
+}
+
+function Write-Tagline([string]$right = '') {
+    $tag = (U 'SERVICIO T\u00c9CNICO').ToCharArray() -join ' '
+    $gap = [math]::Max(2, $CW - 4 - $tag.Length - $right.Length)
+    Write-Host "$MG$cAcc$gHeavy$gHeavy$RST  $cMut$tag$RST$(' ' * $gap)$cDim$right$RST"
+}
+
+# ---------- arranque ----------
+# los datos lentos se piden en paralelo (runspaces) mientras se anima cada linea
+function Show-Intro {
+    $jobs = [ordered]@{
+        'Sistema'    = { $os = Get-CimInstance Win32_OperatingSystem; $cv = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
+                         $os.Caption; $(if ($cv.DisplayVersion) { $cv.DisplayVersion } else { $cv.ReleaseId }); $os.BuildNumber }
+        'Procesador' = { $c = Get-CimInstance Win32_Processor | Select-Object -First 1; $c.Name; $c.NumberOfCores; $c.NumberOfLogicalProcessors }
+        'Red'        = { (Get-NetIPConfiguration | Where-Object { $_.IPv4DefaultGateway } | Select-Object -First 1).IPv4Address.IPAddress }
+        'Licencia'   = { (Get-CimInstance SoftwareLicensingProduct -Filter "PartialProductKey IS NOT NULL AND Name LIKE 'Windows%'" | Select-Object -First 1).LicenseStatus -eq 1 }
+    }
+    $run = foreach ($n in $jobs.Keys) { $ps = [powershell]::Create().AddScript($jobs[$n]); @{ Name = $n; Ps = $ps; H = $ps.BeginInvoke() } }
+
+    Clear-Host
+    Write-Host ''
+    $top = [Console]::CursorTop
+    [Console]::CursorVisible = $false
+    for ($s = -6; $s -le $LogoW + 8; $s += 3) {
+        [Console]::SetCursorPosition(0, $top)
+        [Console]::Write(((Get-Logo $s $s) -join "`r`n"))
+        Start-Sleep -Milliseconds 6
+    }
+    [Console]::SetCursorPosition(0, $top)
+    [Console]::Write(((Get-Logo) -join "`r`n") + "`r`n")
+    Write-Tagline 'Luca Mengarelli'
+    Write-Host ''
+
+    $res = @{}
+    $i = 0
+    foreach ($j in $run) {
+        while (-not $j.H.IsCompleted) {
+            [Console]::Write("`r$MG$cDim$gRing$RST $cMut$($j.Name.PadRight(12))$RST$(Get-Loader $i)$e[K")
+            Start-Sleep -Milliseconds 40; $i++
+        }
+        $out = @(try { $j.Ps.EndInvoke($j.H) } catch { }); $j.Ps.Dispose()
+        $res[$j.Name] = $out
+        $val = switch ($j.Name) {
+            'Sistema'    { '{0} {1}' -f ($out[0] -replace '^Microsoft\s+', ''), $out[1] }
+            'Procesador' { "$($out[0])".Trim() }
+            'Red'        { if ($out[0]) { "$($out[0])" } else { U 'Sin conexi\u00f3n' } }
+            'Licencia'   { if ("$($out[0])" -eq 'True') { 'Windows activado' } else { 'Windows sin activar' } }
+        }
+        [Console]::Write("`r$MG$cOk$gDot$RST $cMut$($j.Name.PadRight(12))$RST$cTxt$val$RST$e[K`r`n")
+        Start-Sleep -Milliseconds 70
+    }
+    [Console]::CursorVisible = $true
+
+    $o = $res['Sistema']; $c = $res['Procesador']
+    $script:Activated = "$($res['Licencia'][0])" -eq 'True'
+    $script:Sys = @{
+        Os    = "$($o[0])" -replace '^Microsoft\s+', ''
+        Ver   = "$($o[1])"
+        Build = "$($o[2])"
+        Cpu   = (("$($c[0])" -replace '\((R|TM)\)|CPU|Processor|\d+-Core|with .*|@.*$', '') -replace '\s+', ' ').Trim()
+        Cores = U ('{0} n\u00facleos {1} {2} hilos' -f $c[1], $gSep, $c[2])
+        Ip    = if ($res['Red'][0]) { "$($res['Red'][0])" } else { 'Sin red' }
+    }
+    Start-Sleep -Milliseconds 450
+}
+
 function Update-Activation {
     $lic = Get-CimInstance SoftwareLicensingProduct -Filter "PartialProductKey IS NOT NULL AND Name LIKE 'Windows%'" -ErrorAction SilentlyContinue | Select-Object -First 1
     $script:Activated = $lic.LicenseStatus -eq 1
 }
 
-function Get-Static {
-    $os  = Get-CimInstance Win32_OperatingSystem
-    $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
-    $cv  = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
-    $ip  = try { (Get-NetIPConfiguration -ErrorAction Stop | Where-Object { $_.IPv4DefaultGateway } | Select-Object -First 1).IPv4Address.IPAddress } catch { $null }
-    $script:Sys = @{
-        Os    = $os.Caption -replace '^Microsoft\s+', ''
-        Ver   = ('{0} ({1})' -f $(if ($cv.DisplayVersion) { $cv.DisplayVersion } else { $cv.ReleaseId }), $os.BuildNumber).Trim()
-        Cpu   = (($cpu.Name -replace '\((R|TM)\)|CPU|Processor|\d+-Core|with .*|@.*$', '') -replace '\s+', ' ').Trim()
-        Cores = U ('{0} n\u00facleos {1} {2} hilos' -f $cpu.NumberOfCores, $gSep, $cpu.NumberOfLogicalProcessors)
-        Ip    = if ($ip) { $ip } else { 'Sin red' }
-    }
-    Update-Activation
+# ---------- pantalla ----------
+# un segmento = @(largo visible, texto con color)
+function Seg([string]$text, $color, [int]$max) { $t = Fit $text $max; , @($t.Length, "$color$t$RST") }
+function Get-Meter([double]$p, [int]$w) {
+    $n = [int][math]::Round([math]::Min(1.0, $p) * $w)
+    $col = if ($p -lt .75) { $cAcc } elseif ($p -lt .9) { $cWarn } else { $cBad }
+    , @($w, "$col$($gHeavy * $n)$cLine$($gHeavy * ($w - $n))$RST")
 }
 
-# ---------- pantalla ----------
-function Cell([string]$text, $color, [int]$w) { $t = Fit $text ($w - 3); "$color$t$RST" + (' ' * ($w - $t.Length)) }
-function Bar([double]$p, [int]$w) {
-    $bw = $w - 4
-    $n = [int][math]::Round([math]::Min(1.0, $p) * $bw)
-    $col = if ($p -lt .75) { $cAcc } elseif ($p -lt .9) { $cWarn } else { $cBad }
-    "$col$($gHeavy * $n)$cLine$($gHeavy * ($bw - $n))$RST    "
+function Get-Card([string]$title, [int]$w, $l1, $l2, $foot) {
+    $in = $w - 4
+    "$cLine$gTL$gLine $cDim$title$cLine $($gLine * [math]::Max(0, $w - 5 - $title.Length))$gTR$RST"
+    foreach ($l in $l1, $l2) { "$cLine$gV$RST " + $l[1] + (' ' * [math]::Max(0, $in - $l[0])) + " $cLine$gV$RST" }
+    "$cLine$gBL$gLine $RST$($foot[1])$cLine $($gLine * [math]::Max(0, $w - 5 - $foot[0]))$gBR$RST"
 }
 
 function Show-Banner {
@@ -123,66 +265,91 @@ function Show-Banner {
     $on   = (Get-Date) - $os.LastBootUpTime
     $onS  = if ($on.TotalDays -ge 1) { '{0} d {1} h' -f $on.Days, $on.Hours } else { '{0} h {1} min' -f $on.Hours, $on.Minutes }
 
-    # marca a la izquierda, red y hora a la derecha
     Write-Host ''
-    $who   = 'Luca Mengarelli'
-    $right = "$($Sys.Ip)   $gSep   $(Get-Date -Format 'dd/MM/yyyy  HH:mm')"
-    $gap   = [math]::Max(2, $CW - 2 - $Brand.Length - 3 - $who.Length - $right.Length)
-    Write-Host "$MG$cAcc$gEdge$RST $BOLD$cWhi$Brand$RST   $cMut$who$(' ' * $gap)$cDim$right$RST"
-    Rule
+    Write-Host ($LogoLines -join "`r`n")
+    Write-Tagline "Encendido $onS  $gSep  $(Get-Date -Format 'HH:mm')"
     Write-Host ''
 
-    # cuatro columnas de estado
-    $w = @(34, 23, 17, 18) | ForEach-Object { [int][math]::Floor($_ * $CW / 92) }
-    $lic = if ($Activated) { "$cOk$gDot$RST ${cTxt}Activado" } else { "$cBad$gDot$RST ${cTxt}Sin activar" }
-    $licLen = if ($Activated) { 10 } else { 13 }
-    $verTxt = Fit $Sys.Ver ($w[0] - 3 - $licLen - 5)
-    Write-Host ($MG + (Cell 'EQUIPO' $cDim $w[0]) + (Cell 'PROCESADOR' $cDim $w[1]) + (Cell 'MEMORIA' $cDim $w[2]) + (Cell "DISCO $($env:SystemDrive)" $cDim $w[3]))
-    Write-Host ($MG + (Cell $env:COMPUTERNAME $cWhi $w[0]) + (Cell $Sys.Cpu $cWhi $w[1]) + (Cell ('{0:N1} / {1:N0} GB' -f $ramU, $ramT) $cWhi $w[2]) + (Cell ('{0:N0} / {1:N0} GB' -f ($dT - $dF), $dT) $cWhi $w[3]))
-    Write-Host ($MG + (Cell $Sys.Os $cMut $w[0]) + (Cell $Sys.Cores $cMut $w[1]) + (Bar ($ramU / $ramT) $w[2]) + (Bar (($dT - $dF) / $dT) $w[3]))
-    Write-Host ($MG + "$cMut$verTxt$RST  $cDim$gSep$RST  $lic$RST" + (' ' * [math]::Max(0, $w[0] - $verTxt.Length - 5 - $licLen)) + (Cell "Encendido $onS" $cMut $w[1]) + (Cell ('{0:N0} % en uso' -f ($ramU / $ramT * 100)) $cMut $w[2]) + (Cell ('{0:N0} GB libres' -f $dF) $cMut $w[3]))
+    $osTxt = if ($Sys.Os.Length -gt 25) { $Sys.Os -replace 'Enterprise', 'Ent.' -replace 'Professional', 'Pro' } else { $Sys.Os }
+    $licP  = if ($Activated) { 'Activado' } else { 'Sin activar' }
+    $licC  = if ($Activated) { $cOk } else { $cBad }
+    $ver   = Fit $Sys.Ver 8
+    $f1    = @(($ver.Length + 5 + $licP.Length), "$cMut$ver $cDim$gSep$RST $licC$gDot$RST $cTxt$licP$RST")
+    $pct   = $ramU / $ramT
+    $c1 = @(Get-Card 'EQUIPO' 29 (Seg $env:COMPUTERNAME $cWhi 25) (Seg $osTxt $cMut 25) $f1)
+    $c2 = @(Get-Card 'PROCESADOR' 23 (Seg $Sys.Cpu $cWhi 19) (Seg $Sys.Cores $cMut 19) (Seg $Sys.Ip $cMut 17))
+    $c3 = @(Get-Card 'MEMORIA' 18 (Seg ('{0:N1} / {1:N0} GB' -f $ramU, $ramT) $cWhi 14) (Get-Meter $pct 14) (Seg ('{0:N0} % en uso' -f ($pct * 100)) $cMut 12))
+    $c4 = @(Get-Card "DISCO $($env:SystemDrive)" 19 (Seg ('{0:N0} / {1:N0} GB' -f ($dT - $dF), $dT) $cWhi 15) (Get-Meter (($dT - $dF) / $dT) 15) (Seg ('{0:N0} GB libres' -f $dF) $cMut 13))
+    for ($j = 0; $j -lt 4; $j++) { Write-Host "$MG$($c1[$j]) $($c2[$j]) $($c3[$j]) $($c4[$j])" }
     Write-Host ''
 }
 
+# fila de 44 columnas visibles
 function Format-Row($it, $on) {
-    $name  = (Fit $it.Name 25).PadRight(26)
-    $desc  = if ($DescW) { (Fit "$($it.Desc)" ($DescW - 2)).PadRight($DescW) } else { '' }
-    $badge = ' ' * $BadgeW
+    $name  = (Fit $it.Name 21).PadRight(22)
+    $badge = ' ' * 16
     if ($it.B) {
-        $txt   = Fit $it.B[0] ($BadgeW - 2)
-        $badge = (' ' * ($BadgeW - 2 - $txt.Length)) + "$($it.B[1])$gDot $cMut$txt"
+        $txt   = Fit $it.B[0] 14
+        $badge = (' ' * (14 - $txt.Length)) + "$($it.B[1])$gDot $cMut$txt"
     }
     $k = "$($it.Key)".ToUpper()
-    if ($on) { "  $cAcc$gEdge$BGSEL $cAcc$BOLD$k$RST$BGSEL   $cWhi$BOLD$name$RST$BGSEL$cTxt$desc$badge $RST" }
-    else     { "    $cDim$k   $cTxt$name$cMut$desc$badge $RST" }
+    if ($on) { "$cAcc$gEdge$BGSEL $cAcc$BOLD$k$RST$BGSEL  $cWhi$BOLD$name$RST$BGSEL$badge $RST" }
+    else     { "  $cDim$k  $cTxt$name$badge $RST" }
 }
 
-function Select-Menu($Items, [int]$Index = 0) {
+# menu en dos columnas (Col 0/1); los items Hide solo responden a su tecla
+function Select-Menu($Items, [int]$Index = 0, [switch]$Main) {
+    $vis = @(for ($i = 0; $i -lt $Items.Count; $i++) { if (-not $Items[$i].Hide) { $i } })
+    $pos = @{}; $rowN = @(0, 0); $sec = @($null, $null)
+    foreach ($i in $vis) {
+        $c = [int]$Items[$i].Col
+        if ($Items[$i].Sec -and $Items[$i].Sec -ne $sec[$c]) { if ($rowN[$c]) { $rowN[$c]++ }; $sec[$c] = $Items[$i].Sec; $rowN[$c]++ }
+        $pos[$i] = @($c, $rowN[$c]); $rowN[$c]++
+    }
+    if ($vis -notcontains $Index) { $Index = $vis[0] }
+    $hints = if ($Main) { "$(Key "$gUp$gDn$gLeft$gRight") ${cMut}Navegar$RST   $(Key 'Enter') ${cMut}Abrir$RST   $(Key '1-9') ${cMut}Atajo$RST   $(Key 'X') ${cMut}Reiniciar$RST   $(Key 'Q') ${cMut}Salir$RST" }
+             else { "$(Key "$gUp$gDn") ${cMut}Navegar$RST   $(Key 'Enter') ${cMut}Elegir$RST   $(Key 'Esc') ${cMut}Volver$RST" }
     $top = [Console]::CursorTop
     [Console]::CursorVisible = $false
     try {
         while ($true) {
-            $sb = New-Object Text.StringBuilder
-            $sec = $null
-            for ($i = 0; $i -lt $Items.Count; $i++) {
-                if ($Items[$i].Sec -and $Items[$i].Sec -ne $sec) {
-                    $sec = $Items[$i].Sec
-                    [void]$sb.Append("$MG $cDim$sec$RST$e[K`r`n")
+            $cols = @((New-Object Collections.Generic.List[string]), (New-Object Collections.Generic.List[string]))
+            $sec = @($null, $null)
+            foreach ($i in $vis) {
+                $c = [int]$Items[$i].Col
+                if ($Items[$i].Sec -and $Items[$i].Sec -ne $sec[$c]) {
+                    $sec[$c] = $Items[$i].Sec
+                    if ($cols[$c].Count) { $cols[$c].Add(' ' * 44) }
+                    $cols[$c].Add("  $cDim$($sec[$c])$RST" + (' ' * (42 - $sec[$c].Length)))
                 }
-                [void]$sb.Append((Format-Row $Items[$i] ($i -eq $Index)) + "`r`n")
+                $cols[$c].Add((Format-Row $Items[$i] ($i -eq $Index)))
             }
-            [void]$sb.Append("`r`n$MG$(Key "$gUp$gDn") ${cMut}Navegar$RST   $(Key 'Enter') ${cMut}Abrir$RST   $(Key '1-9') ${cMut}Atajo$RST   $(Key 'Esc') ${cMut}Salir$RST$e[K")
+            $sb = New-Object Text.StringBuilder
+            for ($j = 0; $j -lt [math]::Max($cols[0].Count, $cols[1].Count); $j++) {
+                $lft = if ($j -lt $cols[0].Count) { $cols[0][$j] } else { ' ' * 44 }
+                $rgt = if ($j -lt $cols[1].Count) { $cols[1][$j] } else { '' }
+                [void]$sb.Append("$MG$lft    $rgt$RST$e[K`r`n")
+            }
+            [void]$sb.Append("`r`n$MG$cAcc$gPlay$RST $cMut$($Items[$Index].Desc)$RST$e[K`r`n`r`n$MG$hints$e[K")
             [Console]::SetCursorPosition(0, $top)
             [Console]::Write($sb.ToString())
+
             $k = [Console]::ReadKey($true)
+            $c0 = $pos[$Index][0]; $r0 = $pos[$Index][1]
+            $same = @($vis | Where-Object { $pos[$_][0] -eq $c0 })
+            $next = $null
             switch ($k.Key) {
-                'UpArrow'   { $Index = ($Index - 1 + $Items.Count) % $Items.Count; continue }
-                'DownArrow' { $Index = ($Index + 1) % $Items.Count; continue }
-                'Home'      { $Index = 0; continue }
-                'End'       { $Index = $Items.Count - 1; continue }
-                'Enter'     { return $Index }
-                'Escape'    { return -1 }
+                'UpArrow'    { $next = $same | Where-Object { $pos[$_][1] -lt $r0 } | Select-Object -Last 1; if ($null -eq $next) { $next = $same[-1] } }
+                'DownArrow'  { $next = $same | Where-Object { $pos[$_][1] -gt $r0 } | Select-Object -First 1; if ($null -eq $next) { $next = $same[0] } }
+                'LeftArrow'  { $next = $vis | Where-Object { $pos[$_][0] -ne $c0 } | Sort-Object { [math]::Abs($pos[$_][1] - $r0) } | Select-Object -First 1 }
+                'RightArrow' { $next = $vis | Where-Object { $pos[$_][0] -ne $c0 } | Sort-Object { [math]::Abs($pos[$_][1] - $r0) } | Select-Object -First 1 }
+                'Tab'        { $next = $vis[([array]::IndexOf($vis, $Index) + 1) % $vis.Count] }
+                'Home'       { $next = $vis[0] }
+                'End'        { $next = $vis[-1] }
+                'Enter'      { return $Index }
+                'Escape'     { return -1 }
             }
+            if ($null -ne $next) { $Index = $next; continue }
             for ($i = 0; $i -lt $Items.Count; $i++) { if ($Items[$i].Key -eq "$($k.KeyChar)") { return $i } }
         }
     } finally {
@@ -194,7 +361,7 @@ function Select-Menu($Items, [int]$Index = 0) {
 function Show-Header($title) {
     Clear-Host
     Write-Host ''
-    Write-Host "$MG$cAcc$gEdge$RST $cMut$Brand  $gStep  $RST$BOLD$cWhi$title$RST"
+    Write-Host "$MG$cAcc$gHeavy$gHeavy$RST  $cMut$Brand$RST  $cDim$gStep$RST  $BOLD$cWhi$title$RST"
     Rule
     Write-Host ''
 }
@@ -325,19 +492,33 @@ function Install-Office {
 }
 
 # ---------- store ----------
+# wsreset -i (ltsc 2021 en adelante) pide la store a windows update y la instala en segundo plano:
+# hay que esperarla varios minutos, y no anda si winutil dejo windows update deshabilitado
 function Install-Store {
-    Step 'Instalando Microsoft Store...'
-    try { Start-Process wsreset.exe -ArgumentList '-i' -Wait -ErrorAction Stop } catch {}
-    Start-Sleep 5
-    $pkg = Get-AppxPackage -AllUsers Microsoft.WindowsStore
-    if (-not $pkg) {
-        Get-ChildItem "$env:ProgramFiles\WindowsApps" -Filter 'Microsoft.WindowsStore*' -ErrorAction SilentlyContinue | ForEach-Object {
-            Add-AppxPackage -DisableDevelopmentMode -Register "$($_.FullName)\AppxManifest.xml" -ErrorAction SilentlyContinue
-        }
-        $pkg = Get-AppxPackage -AllUsers Microsoft.WindowsStore
+    if (Get-AppxPackage Microsoft.WindowsStore) { Good (U 'Microsoft Store ya est\u00e1 instalada.'); return }
+    if ([int](Get-CimInstance Win32_OperatingSystem).BuildNumber -lt 19041) {
+        Fail (U 'Esta versi\u00f3n de Windows (LTSC 2019 o anterior) no permite instalar la Store con wsreset.')
+        return
     }
-    if ($pkg) { Good 'Microsoft Store instalada.' }
-    else { Fail (U 'No se pudo confirmar. Revis\u00e1 la conexi\u00f3n y reintent\u00e1; puede tardar unos minutos.') }
+    $off = @(foreach ($n in 'wuauserv', 'BITS', 'InstallService', 'ClipSVC') {
+        $s = Get-Service $n -ErrorAction SilentlyContinue
+        if ($s -and $s.StartType -eq 'Disabled') { Set-Service $n -StartupType Manual -ErrorAction SilentlyContinue; $n }
+    })
+    if ($off) { Warn "Habilitados temporalmente: $($off -join ', ')" }
+    Step 'Pidiendo Microsoft Store a Windows Update...'
+    Start-Process wsreset.exe -ArgumentList '-i' -WindowStyle Hidden
+    $ini = Get-Date; $i = 0; $ok = $false
+    [Console]::CursorVisible = $false
+    while (((Get-Date) - $ini).TotalMinutes -lt 8) {
+        if ($i % 40 -eq 0 -and (Get-AppxPackage Microsoft.WindowsStore)) { $ok = $true; break }
+        [Console]::Write("`r$MG  $(Get-Loader $i 20)  ${cMut}Instalando en segundo plano  $([int]((Get-Date) - $ini).TotalSeconds) s$RST$e[K")
+        Start-Sleep -Milliseconds 50; $i++
+    }
+    [Console]::CursorVisible = $true
+    [Console]::Write("`r$e[K")
+    foreach ($n in $off) { Set-Service $n -StartupType Disabled -ErrorAction SilentlyContinue }
+    if ($ok) { Good 'Microsoft Store instalada. Puede tardar un minuto en aparecer en Inicio.' }
+    else { Fail (U 'No termin\u00f3 en 8 minutos. Revis\u00e1 la conexi\u00f3n y que Windows Update funcione, y reintent\u00e1.') }
 }
 
 # ---------- reparacion ----------
@@ -531,61 +712,56 @@ $batRows
 
 # ---------- menu ----------
 $Menu = @(
-    @{ Sec = 'HERRAMIENTAS'; Key = '1'; Name = 'WinUtil'; Desc = 'Ajustes y programas de Windows'
+    @{ Col = 0; Sec = 'HERRAMIENTAS'; Key = '1'; Name = 'WinUtil'; Desc = 'Ajustes, programas y optimizaciones de Windows (Chris Titus Tech)'
        Run = { Invoke-RestMethod 'https://christitus.com/win' | Invoke-Expression } },
-    @{ Sec = 'HERRAMIENTAS'; Key = '2'; Name = 'Activar Windows y Office'; Desc = 'Mediante get.activated.win'
+    @{ Col = 0; Sec = 'HERRAMIENTAS'; Key = '2'; Name = U 'Activaci\u00f3n'; Desc = 'Activa Windows y Office mediante get.activated.win'
        Badge = { if ($Activated) { 'Activado', $cOk } else { 'Sin activar', $cBad } }
        Run = { Invoke-RestMethod 'https://get.activated.win' | Invoke-Expression; Update-Activation } },
-    @{ Sec = (U 'INSTALACI\u00d3N'); Key = '3'; Name = 'Office LTSC'; Desc = U 'Versi\u00f3n 2021 o 2024 en espa\u00f1ol'
+    @{ Col = 0; Sec = (U 'INSTALACI\u00d3N'); Key = '3'; Name = 'Office LTSC'; Desc = U 'Descarga e instala Office 2021 o 2024 en espa\u00f1ol desde Microsoft'
        Badge = { $ids = Get-OfficeIds; if ($ids -match '20\d\d') { "$($Matches[0]) instalado", $cOk } elseif ($ids) { 'Instalado', $cOk } else { 'No instalado', $cDim } }
        Run = { Install-Office } },
-    @{ Sec = (U 'INSTALACI\u00d3N'); Key = '4'; Name = 'Microsoft Store'; Desc = 'Para ediciones LTSC'
+    @{ Col = 0; Sec = (U 'INSTALACI\u00d3N'); Key = '4'; Name = 'Microsoft Store'; Desc = 'Instala la tienda de Microsoft en ediciones LTSC'
        Badge = { if (Get-AppxPackage Microsoft.WindowsStore) { 'Instalada', $cOk } else { 'No instalada', $cDim } }
        Run = { Install-Store } },
-    @{ Sec = 'MANTENIMIENTO'; Key = '5'; Name = 'Limpieza'; Desc = 'Temporales, actualizaciones y papelera'
+    @{ Col = 0; Sec = 'EQUIPO'; Key = 'r'; Name = 'Informe del equipo'; Desc = U 'Genera un informe HTML con hardware, discos y bater\u00eda para el cliente'
+       Run = { New-Report } },
+    @{ Col = 1; Sec = 'MANTENIMIENTO'; Key = '5'; Name = 'Limpieza'; Desc = U 'Borra temporales, actualizaciones descargadas y vac\u00eda la papelera'
        Badge = { $l = Get-Content "$Base\limpieza.log" -Tail 1 -ErrorAction SilentlyContinue
                  if ($l) { (Get-Ago ([datetime]::ParseExact($l.Substring(0, 16), 'yyyy-MM-dd HH:mm', $null))), $cMut } else { 'Nunca', $cWarn } }
        Run = { Invoke-Clean } },
-    @{ Sec = 'MANTENIMIENTO'; Key = '6'; Name = U 'Limpieza autom\u00e1tica'; Desc = 'Se ejecuta en cada inicio'
+    @{ Col = 1; Sec = 'MANTENIMIENTO'; Key = '6'; Name = U 'Limpieza autom\u00e1tica'; Desc = 'Tarea programada que limpia en cada inicio de Windows'
        Badge = { if (Get-ScheduledTask -TaskName 'ServicioTecnico-Limpieza' -ErrorAction SilentlyContinue) { 'Activa', $cOk } else { 'Inactiva', $cDim } }
        Run = { Install-CleanTask } },
-    @{ Sec = 'MANTENIMIENTO'; Key = '7'; Name = 'Reparar Windows'; Desc = 'DISM y SFC sobre archivos del sistema'
+    @{ Col = 1; Sec = 'MANTENIMIENTO'; Key = '7'; Name = 'Reparar Windows'; Desc = 'Repara la imagen y los archivos del sistema con DISM y SFC'
        Run = { Repair-Windows } },
-    @{ Sec = 'MANTENIMIENTO'; Key = '8'; Name = 'Restablecer red'; Desc = 'DNS, Winsock y TCP/IP'
+    @{ Col = 1; Sec = 'MANTENIMIENTO'; Key = '8'; Name = 'Restablecer red'; Desc = U 'Vac\u00eda la cach\u00e9 DNS y restablece Winsock y TCP/IP'
        Run = { Reset-Network } },
-    @{ Sec = 'MANTENIMIENTO'; Key = '9'; Name = U 'Punto de restauraci\u00f3n'; Desc = 'Crear uno antes de hacer cambios'
+    @{ Col = 1; Sec = 'MANTENIMIENTO'; Key = '9'; Name = U 'Punto de restauraci\u00f3n'; Desc = U 'Crea un punto para volver atr\u00e1s antes de hacer cambios'
        Badge = { $p = Get-ComputerRestorePoint -ErrorAction SilentlyContinue | Select-Object -Last 1
                  if ($p) { (Get-Ago ([Management.ManagementDateTimeConverter]::ToDateTime($p.CreationTime))), $cMut } else { 'Ninguno', $cWarn } }
        Run = { New-RestorePoint } },
-    @{ Sec = 'EQUIPO'; Key = 'r'; Name = 'Informe del equipo'; Desc = U 'Hardware, discos y bater\u00eda en HTML'
-       Run = { New-Report } },
-    @{ Sec = 'EQUIPO'; Key = 'x'; Name = 'Reiniciar equipo'; Desc = ''
-       Run = { Restart-Now } },
-    @{ Sec = 'EQUIPO'; Key = 'q'; Name = 'Salir'; Desc = '' }
+    @{ Hide = $true; Key = 'x'; Name = 'Reiniciar equipo'; Run = { Restart-Now } },
+    @{ Hide = $true; Key = 'q'; Name = 'Salir' }
 )
 
-$CW     = [math]::Min(92, [Console]::WindowWidth - 6)
-$BadgeW = 18
-$DescW  = [math]::Max(0, $CW - 32 - $BadgeW)
-if ($DescW -lt 16) { $DescW = 0 }
-
-Clear-Host
-Write-Host ''
-Write-Host "$MG$cAcc$gEdge$RST $BOLD$cWhi$Brand$RST   ${cMut}Preparando...$RST"
-Get-Static
+# nombre completo si entra; si la ventana es angosta, solo "LUCA"
+Initialize-Logo $(if ([Console]::WindowWidth -ge 98) { 'LUCA MENGARELLI' } else { 'LUCA' })
+$LogoLines = @(Get-Logo)
+Show-Intro
 $cur = 0
 while ($true) {
     try {
         Show-Banner
         foreach ($it in $Menu) { $it.B = if ($it.Badge) { try { & $it.Badge } catch { $null } } }
-        $pick = Select-Menu $Menu $cur
+        $pick = Select-Menu $Menu $cur -Main
         if ($pick -eq -1 -or -not $Menu[$pick].Run) {
             $Host.UI.RawUI.BackgroundColor = $OrigBg; $Host.UI.RawUI.ForegroundColor = $OrigFg
+            Write-Host -NoNewline "$e[0m"
             Clear-Host
             return
         }
-        $cur = $pick
-        $it = $Menu[$cur]
+        if (-not $Menu[$pick].Hide) { $cur = $pick }
+        $it = $Menu[$pick]
         Show-Header $it.Name
         $sw = [Diagnostics.Stopwatch]::StartNew()
         $res = 'ok'
