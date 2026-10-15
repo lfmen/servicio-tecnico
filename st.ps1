@@ -15,84 +15,70 @@ if (-not $admin) {
         }
     } catch {
         Write-Host ("no se pudo pedir permisos de administrador: {0}" -f $_.Exception.Message) -ForegroundColor Red
+        Write-Host 'abri una powershell comun (win + x > terminal) y volve a correr el comando.' -ForegroundColor Yellow
     }
     return
 }
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
-$Host.UI.RawUI.WindowTitle = 'servicio tecnico - luca mengarelli'
 New-Item -ItemType Directory -Force -Path $Base | Out-Null
 # solo SYSTEM y administradores escriben (la tarea corre como SYSTEM); usuarios solo leen
 icacls $Base /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-32-545:(OI)(CI)RX' | Out-Null
 
 # ---------- estilo ----------
-# el archivo queda en ascii (ps 5.1 lee -File sin bom como ansi); los glifos se arman con [char]
+# el archivo queda en ascii (ps 5.1 lee -File sin bom como ansi): acentos con \u00xx via U, glifos con [char]
+# ojo: ps no distingue mayusculas, asi que ninguna variable local puede llamarse como estas
+function U([string]$s) { [regex]::Unescape($s) }
 $e = [char]27
-function Rgb($r, $g, $b) { "$e[38;2;$r;$g;${b}m" }
-$R     = "$e[0m"
-$Sel   = "$e[48;2;20;34;54m"
-$cAcc  = Rgb 60 200 255
-$cWhi  = Rgb 245 245 250
-$cTxt  = Rgb 205 205 220
-$cMut  = Rgb 140 140 160
-$cDim  = Rgb 85 85 105
-$cOk   = Rgb 80 220 140
-$cWarn = Rgb 255 196 80
-$cBad  = Rgb 255 95 95
-$Blk = [string][char]0x2588; $Shd = [string][char]0x2591; $Dot = [string][char]0x25CF
-$Arr = [string][char]0x25BA; $Edge = [string][char]0x258C; $Ln = [string][char]0x2500
-$Up  = [string][char]0x2191; $Dn = [string][char]0x2193; $Md = [string][char]0x00B7
+function Rgb($cr, $cg, $cb) { "$e[38;2;$cr;$cg;${cb}m" }
+$RST    = "$e[0m"
+$BOLD   = "$e[1m"
+$BGSEL  = "$e[48;2;24;28;38m"
+$BGKEY  = "$e[48;2;40;42;50m$(Rgb 230 230 235)"
+$cAcc   = Rgb 91 155 255
+$cWhi   = Rgb 245 245 247
+$cTxt   = Rgb 214 214 220
+$cMut   = Rgb 138 138 148
+$cDim   = Rgb 82 82 92
+$cLine  = Rgb 44 44 52
+$cOk    = Rgb 61 220 151
+$cWarn  = Rgb 245 184 65
+$cBad   = Rgb 255 92 92
+$gDot  = [string][char]0x25CF; $gEdge = [string][char]0x258C; $gLine = [string][char]0x2500
+$gHeavy = [string][char]0x2501; $gStep = [string][char]0x203A; $gTri = [string][char]0x25B2
+$gX    = [string][char]0x00D7; $gUp = [string][char]0x2191; $gDn = [string][char]0x2193
+$gSep  = [string][char]0x00B7
+$MG    = '   '
+$Brand = U 'Servicio T\u00e9cnico'
+$Host.UI.RawUI.WindowTitle = "$Brand $gSep Luca Mengarelli"
 
-function Get-Grad([string]$s, [switch]$Shadow) {
-    $o = ''
-    for ($i = 0; $i -lt $s.Length; $i++) {
-        $c = $s[$i]
-        if ($c -eq ' ') { $o += ' '; continue }
-        $t = $i / [math]::Max(1, $s.Length - 1)
-        $cr = 40 + 150 * $t; $cg = 220 - 120 * $t; $cb = 255   # no usar $r: pisa $R (ps no distingue mayusculas)
-        if ($Shadow -and $c -ne $Blk[0]) { $cr *= .4; $cg *= .4; $cb *= .5 }   # bordes mas oscuros = efecto 3d
-        $o += (Rgb ([int]$cr) ([int]$cg) ([int]$cb)) + $c
-    }
-    $o + $R
-}
+# fondo negro en vez del azul de windows powershell; se restaura al salir
+$OrigBg = $Host.UI.RawUI.BackgroundColor; $OrigFg = $Host.UI.RawUI.ForegroundColor
+$Host.UI.RawUI.BackgroundColor = 'Black'; $Host.UI.RawUI.ForegroundColor = 'Gray'
+try { $Host.PrivateData.ProgressBackgroundColor = 'Black'; $Host.PrivateData.ProgressForegroundColor = 'Gray' } catch {}
 
-# "luca" en ansi shadow, escrito en ascii y traducido a bloques
-$Glyph = @{ '#' = 0x2588; '7' = 0x2557; 'I' = 0x2551; 'r' = 0x2554; '=' = 0x2550; 'J' = 0x255D; 'L' = 0x255A; ' ' = 0x20 }
-$Art = @(
-    '##7     ##7   ##7 ######7 #####7 ',
-    '##I     ##I   ##I##r====J##r==##7',
-    '##I     ##I   ##I##I     #######I',
-    '##I     ##I   ##I##I     ##r==##I',
-    '#######7L######rJL######7##I  ##I',
-    'L======J L=====J  L=====JL=J  L=J'
-) | ForEach-Object { Get-Grad -Shadow (-join ($_.ToCharArray() | ForEach-Object { [char]$Glyph[[string]$_] })) }
-
-function Say($color, $mark, $text) { Write-Host "    $color$mark$R $cTxt$text$R" }
-function Step($t) { Say $cAcc $Arr $t }
-function Good($t) { Say $cOk $Dot $t }
-function Warn($t) { Say $cWarn $Dot $t }
-function Fail($t) { Say $cBad $Dot $t }
-function Fit([string]$s, [int]$n) { if ($s.Length -gt $n) { $s.Substring(0, $n - 1) + [char]0x2026 } else { $s } }
-function Write-Log($msg) { Add-Content "$Base\historial.log" ('{0}  {1}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm'), $msg) }
+function Say($color, $mark, $text) { Write-Host "$MG$color$mark$RST $cTxt$text$RST" }
+function Step($t) { Say $cAcc $gStep $t }
+function Good($t) { Say $cOk $gDot $t }
+function Warn($t) { Say $cWarn $gTri $t }
+function Fail($t) { Say $cBad $gX $t }
+function Key($k) { "$BGKEY $k $RST" }
+function Rule { Write-Host "$MG$cLine$($gLine * $CW)$RST" }
+function Fit([string]$s, [int]$n) { if ($n -lt 2) { '' } elseif ($s.Length -gt $n) { $s.Substring(0, $n - 1) + [char]0x2026 } else { $s } }
+function Write-Log($msg) { Add-Content "$Base\historial.log" ('{0}  {1}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm'), $msg) -Encoding UTF8 }
 
 function Get-Ago([datetime]$d) {
     $s = (Get-Date) - $d
-    if ($s.TotalDays -ge 1) { '{0}d' -f [int][math]::Floor($s.TotalDays) }
-    elseif ($s.TotalHours -ge 1) { '{0}h' -f [int][math]::Floor($s.TotalHours) }
-    else { '{0}m' -f [int][math]::Floor($s.TotalMinutes) }
-}
-
-function Get-Bar([double]$p, [int]$w = 14) {
-    $n = [int][math]::Round([math]::Min(1.0, $p) * $w)
-    $col = if ($p -lt .6) { $cOk } elseif ($p -lt .85) { $cWarn } else { $cBad }
-    "$col$($Blk * $n)$cDim$($Shd * ($w - $n))$R"
+    if ($s.TotalDays -ge 1) { 'Hace {0} d' -f [int][math]::Floor($s.TotalDays) }
+    elseif ($s.TotalHours -ge 1) { 'Hace {0} h' -f [int][math]::Floor($s.TotalHours) }
+    else { 'Hace {0} min' -f [int][math]::Floor($s.TotalMinutes) }
 }
 
 function Confirm-Action($q) {
-    Write-Host -NoNewline "    $cWarn?$R $cTxt$q $cDim(s/n)$R "
+    Write-Host -NoNewline "$MG$cWarn?$RST $cTxt$q$RST   $(Key 'S') $cMut$(U 'S\u00ed')$RST  $(Key 'N') ${cMut}No$RST  "
     $k = [Console]::ReadKey($true)
     $y = "$($k.KeyChar)" -match '^[sy]$'
-    Write-Host $(if ($y) { "${cOk}si$R" } else { "${cDim}no$R" })
+    Write-Host ''
     $y
 }
 
@@ -108,59 +94,67 @@ function Get-Static {
     $cv  = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
     $ip  = try { (Get-NetIPConfiguration -ErrorAction Stop | Where-Object { $_.IPv4DefaultGateway } | Select-Object -First 1).IPv4Address.IPAddress } catch { $null }
     $script:Sys = @{
-        Os    = ($os.Caption -replace '^Microsoft\s+Windows\s+', '').ToLower()
-        Ver   = ("{0} {1}" -f $(if ($cv.DisplayVersion) { $cv.DisplayVersion } else { $cv.ReleaseId }), $os.BuildNumber).Trim().ToLower()
-        Cpu   = (($cpu.Name -replace '\((R|TM)\)|CPU|Processor|\d+-Core|with .*|@.*$', '') -replace '\s+', ' ').Trim().ToLower()
-        Cores = '{0}c/{1}t' -f $cpu.NumberOfCores, $cpu.NumberOfLogicalProcessors
-        Ip    = if ($ip) { $ip } else { 'sin red' }
+        Os    = $os.Caption -replace '^Microsoft\s+', ''
+        Ver   = ('{0} ({1})' -f $(if ($cv.DisplayVersion) { $cv.DisplayVersion } else { $cv.ReleaseId }), $os.BuildNumber).Trim()
+        Cpu   = (($cpu.Name -replace '\((R|TM)\)|CPU|Processor|\d+-Core|with .*|@.*$', '') -replace '\s+', ' ').Trim()
+        Cores = U ('{0} n\u00facleos {1} {2} hilos' -f $cpu.NumberOfCores, $gSep, $cpu.NumberOfLogicalProcessors)
+        Ip    = if ($ip) { $ip } else { 'Sin red' }
     }
     Update-Activation
 }
 
 # ---------- pantalla ----------
+function Cell([string]$text, $color, [int]$w) { $t = Fit $text ($w - 3); "$color$t$RST" + (' ' * ($w - $t.Length)) }
+function Bar([double]$p, [int]$w) {
+    $bw = $w - 4
+    $n = [int][math]::Round([math]::Min(1.0, $p) * $bw)
+    $col = if ($p -lt .75) { $cAcc } elseif ($p -lt .9) { $cWarn } else { $cBad }
+    "$col$($gHeavy * $n)$cLine$($gHeavy * ($bw - $n))$RST    "
+}
+
 function Show-Banner {
     Clear-Host
     $os   = Get-CimInstance Win32_OperatingSystem
     $ramT = $os.TotalVisibleMemorySize / 1MB
     $ramU = $ramT - $os.FreePhysicalMemory / 1MB
-    $d    = New-Object IO.DriveInfo $env:SystemDrive
-    $dT   = $d.TotalSize / 1GB
-    $dU   = $dT - $d.AvailableFreeSpace / 1GB
-    $up   = (Get-Date) - $os.LastBootUpTime
-    $lic  = if ($Activated) { "$cOk$Dot ${cTxt}activado" } else { "$cBad$Dot ${cTxt}sin activar" }
-    $info = @(
-        ("equipo   $cTxt{0} $cDim$Md$cTxt {1}" -f (Fit $env:COMPUTERNAME.ToLower() 20), (Fit $env:USERNAME.ToLower() 18)),
-        ("windows  $cTxt{0} $cDim$Md$cTxt {1}" -f (Fit $Sys.Os 28), $Sys.Ver),
-        "licencia $lic",
-        ("cpu      $cTxt{0} $cDim$Md$cTxt {1}" -f (Fit $Sys.Cpu 28), $Sys.Cores),
-        ("ram      {0}  $cTxt{1,3:N0}%  $cMut{2:N1} / {3:N0} gb" -f (Get-Bar ($ramU / $ramT)), ($ramU / $ramT * 100), $ramU, $ramT),
-        ("disco {4}  {0}  $cTxt{1,3:N0}%  $cMut{2:N0} / {3:N0} gb" -f (Get-Bar ($dU / $dT)), ($dU / $dT * 100), $dU, $dT, $env:SystemDrive.TrimEnd(':').ToLower())
-    ) | ForEach-Object { "$cDim$_$R" }
+    $dk   = New-Object IO.DriveInfo $env:SystemDrive
+    $dT   = $dk.TotalSize / 1GB
+    $dF   = $dk.AvailableFreeSpace / 1GB
+    $on   = (Get-Date) - $os.LastBootUpTime
+    $onS  = if ($on.TotalDays -ge 1) { '{0} d {1} h' -f $on.Days, $on.Hours } else { '{0} h {1} min' -f $on.Hours, $on.Minutes }
 
+    # marca a la izquierda, red y hora a la derecha
     Write-Host ''
-    $side = [Console]::WindowWidth -ge 88
-    for ($i = 0; $i -lt 6; $i++) {
-        if ($side) { Write-Host "    $($Art[$i])    $($info[$i])" } else { Write-Host "    $($Art[$i])" }
-    }
-    if (-not $side) { Write-Host ''; $info | ForEach-Object { Write-Host "    $_" } }
+    $who   = 'Luca Mengarelli'
+    $right = "$($Sys.Ip)   $gSep   $(Get-Date -Format 'dd/MM/yyyy  HH:mm')"
+    $gap   = [math]::Max(2, $CW - 2 - $Brand.Length - 3 - $who.Length - $right.Length)
+    Write-Host "$MG$cAcc$gEdge$RST $BOLD$cWhi$Brand$RST   $cMut$who$(' ' * $gap)$cDim$right$RST"
+    Rule
     Write-Host ''
-    $upS   = if ($up.TotalDays -ge 1) { '{0}d {1}h' -f $up.Days, $up.Hours } else { '{0}h {1}m' -f $up.Hours, $up.Minutes }
-    $right = " $($Sys.Ip) $Md encendido $upS $Md $(Get-Date -Format 'dd/MM HH:mm')"
-    $rule  = [math]::Max(3, $W - 17 - $right.Length)
-    Write-Host "    $(Get-Grad 'servicio tecnico') $cDim$($Ln * $rule)$cMut$right$R"
+
+    # cuatro columnas de estado
+    $w = @(34, 23, 17, 18) | ForEach-Object { [int][math]::Floor($_ * $CW / 92) }
+    $lic = if ($Activated) { "$cOk$gDot$RST ${cTxt}Activado" } else { "$cBad$gDot$RST ${cTxt}Sin activar" }
+    $licLen = if ($Activated) { 10 } else { 13 }
+    $verTxt = Fit $Sys.Ver ($w[0] - 3 - $licLen - 5)
+    Write-Host ($MG + (Cell 'EQUIPO' $cDim $w[0]) + (Cell 'PROCESADOR' $cDim $w[1]) + (Cell 'MEMORIA' $cDim $w[2]) + (Cell "DISCO $($env:SystemDrive)" $cDim $w[3]))
+    Write-Host ($MG + (Cell $env:COMPUTERNAME $cWhi $w[0]) + (Cell $Sys.Cpu $cWhi $w[1]) + (Cell ('{0:N1} / {1:N0} GB' -f $ramU, $ramT) $cWhi $w[2]) + (Cell ('{0:N0} / {1:N0} GB' -f ($dT - $dF), $dT) $cWhi $w[3]))
+    Write-Host ($MG + (Cell $Sys.Os $cMut $w[0]) + (Cell $Sys.Cores $cMut $w[1]) + (Bar ($ramU / $ramT) $w[2]) + (Bar (($dT - $dF) / $dT) $w[3]))
+    Write-Host ($MG + "$cMut$verTxt$RST  $cDim$gSep$RST  $lic$RST" + (' ' * [math]::Max(0, $w[0] - $verTxt.Length - 5 - $licLen)) + (Cell "Encendido $onS" $cMut $w[1]) + (Cell ('{0:N0} % en uso' -f ($ramU / $ramT * 100)) $cMut $w[2]) + (Cell ('{0:N0} GB libres' -f $dF) $cMut $w[3]))
     Write-Host ''
 }
 
 function Format-Row($it, $on) {
-    $name = (Fit $it.Name 25).PadRight(26)
-    $desc = if ($DescW) { (Fit "$($it.Desc)" ($DescW - 2)).PadRight($DescW) } else { '' }
+    $name  = (Fit $it.Name 25).PadRight(26)
+    $desc  = if ($DescW) { (Fit "$($it.Desc)" ($DescW - 2)).PadRight($DescW) } else { '' }
     $badge = ' ' * $BadgeW
     if ($it.B) {
-        $plain = "$Dot $($it.B[0])"
-        $badge = (' ' * [math]::Max(0, $BadgeW - $plain.Length)) + "$($it.B[1])$Dot $cMut$($it.B[0])"
+        $txt   = Fit $it.B[0] ($BadgeW - 2)
+        $badge = (' ' * ($BadgeW - 2 - $txt.Length)) + "$($it.B[1])$gDot $cMut$txt"
     }
-    if ($on) { "    $Sel$cAcc$Edge $cAcc$($it.Key)  $cWhi$name$cTxt$desc$badge $R" }
-    else     { "      $cDim$($it.Key)  $cTxt$name$cDim$desc$badge $R" }
+    $k = "$($it.Key)".ToUpper()
+    if ($on) { "  $cAcc$gEdge$BGSEL $cAcc$BOLD$k$RST$BGSEL   $cWhi$BOLD$name$RST$BGSEL$cTxt$desc$badge $RST" }
+    else     { "    $cDim$k   $cTxt$name$cMut$desc$badge $RST" }
 }
 
 function Select-Menu($Items, [int]$Index = 0) {
@@ -173,11 +167,11 @@ function Select-Menu($Items, [int]$Index = 0) {
             for ($i = 0; $i -lt $Items.Count; $i++) {
                 if ($Items[$i].Sec -and $Items[$i].Sec -ne $sec) {
                     $sec = $Items[$i].Sec
-                    [void]$sb.Append("    $cDim$Ln$Ln $sec$R$e[K`r`n")
+                    [void]$sb.Append("$MG $cDim$sec$RST$e[K`r`n")
                 }
                 [void]$sb.Append((Format-Row $Items[$i] ($i -eq $Index)) + "`r`n")
             }
-            [void]$sb.Append("`r`n    $cAcc$Up$Dn$cDim mover   ${cAcc}enter$cDim elegir   ${cAcc}tecla$cDim atajo   ${cAcc}esc$cDim salir$R$e[K")
+            [void]$sb.Append("`r`n$MG$(Key "$gUp$gDn") ${cMut}Navegar$RST   $(Key 'Enter') ${cMut}Abrir$RST   $(Key '1-9') ${cMut}Atajo$RST   $(Key 'Esc') ${cMut}Salir$RST$e[K")
             [Console]::SetCursorPosition(0, $top)
             [Console]::Write($sb.ToString())
             $k = [Console]::ReadKey($true)
@@ -200,8 +194,8 @@ function Select-Menu($Items, [int]$Index = 0) {
 function Show-Header($title) {
     Clear-Host
     Write-Host ''
-    Write-Host "    $cAcc$Arr $cWhi$title$R"
-    Write-Host "    $(Get-Grad ($Ln * $W))"
+    Write-Host "$MG$cAcc$gEdge$RST $cMut$Brand  $gStep  $RST$BOLD$cWhi$title$RST"
+    Rule
     Write-Host ''
 }
 
@@ -244,22 +238,23 @@ $liberado = [math]::Round(((New-Object IO.DriveInfo $env:SystemDrive).AvailableF
 Add-Content $log ("{0}  {1}  liberado: {2} mb" -f (Get-Date -Format 'yyyy-MM-dd HH:mm'), $(if ($Todo) { 'manual' } else { 'auto' }), $liberado)
 '@
 
+function Get-Freed { $l = Get-Content "$Base\limpieza.log" -Tail 1 -ErrorAction SilentlyContinue; if ($l) { ($l -split 'liberado: ')[1].ToUpper() } }
+
 function Invoke-Clean {
-    Warn 'borra temporales, cache de updates, volcados y vacia la papelera.'
-    if (-not (Confirm-Action 'seguir?')) { return }
+    Warn (U 'Se borran temporales, la cach\u00e9 de actualizaciones y volcados, y se vac\u00eda la papelera.')
+    if (-not (Confirm-Action (U '\u00bfContinuar?'))) { return }
     $f = Join-Path $Base 'limpieza.ps1'
     Set-Content -Path $f -Value $CleanScript -Encoding ASCII
-    Step 'limpiando...'
+    Step 'Limpiando...'
     & powershell -NoProfile -ExecutionPolicy Bypass -File $f -Todo
-    $last = Get-Content "$Base\limpieza.log" -Tail 1 -ErrorAction SilentlyContinue
-    Good ('listo. liberado: {0}' -f ($last -split 'liberado: ')[1])
+    Good "Listo. Se liberaron $(Get-Freed)."
 }
 
 function Install-CleanTask {
     $name = 'ServicioTecnico-Limpieza'
     if (Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue) {
-        Good 'la limpieza automatica ya esta activa.'
-        if (Confirm-Action 'desactivarla?') { Unregister-ScheduledTask -TaskName $name -Confirm:$false; Good 'tarea quitada.' }
+        Good (U 'La limpieza autom\u00e1tica ya est\u00e1 activa.')
+        if (Confirm-Action (U '\u00bfDesactivarla?')) { Unregister-ScheduledTask -TaskName $name -Confirm:$false; Good 'Tarea eliminada.' }
         return
     }
     $f = Join-Path $Base 'limpieza.ps1'
@@ -270,7 +265,7 @@ function Install-CleanTask {
     $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
     $settings  = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 1)
     Register-ScheduledTask -TaskName $name -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force -ErrorAction Stop | Out-Null
-    Step 'tarea creada. probandola ahora (como SYSTEM)...'
+    Step 'Tarea creada. Probando como SYSTEM...'
     $ini = Get-Date
     Start-ScheduledTask -TaskName $name
     $fin = $ini.AddMinutes(10)
@@ -280,11 +275,11 @@ function Install-CleanTask {
         $listo = ($info.LastRunTime -ge $ini.AddSeconds(-2)) -and ((Get-ScheduledTask -TaskName $name).State -eq 'Ready')
     } until ($listo -or (Get-Date) -gt $fin)
     if ($listo -and $info.LastTaskResult -eq 0) {
-        Good 'prueba ok: la tarea corre sola en cada inicio.'
-        $last = Get-Content "$Base\limpieza.log" -Tail 1 -ErrorAction SilentlyContinue
-        if ($last) { Good ('primera pasada, liberado: {0}' -f ($last -split 'liberado: ')[1]) }
+        Good 'Prueba correcta: la limpieza se va a ejecutar en cada inicio.'
+        $fr = Get-Freed
+        if ($fr) { Good "Primera pasada: se liberaron $fr." }
     } else {
-        Fail ('la tarea se creo pero la prueba fallo (resultado: {0}). revisar.' -f $info.LastTaskResult)
+        Fail (U ('La tarea se cre\u00f3 pero la prueba fall\u00f3 (resultado {0}).' -f $info.LastTaskResult))
     }
 }
 
@@ -294,14 +289,14 @@ function Get-OfficeIds { (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Office\Clic
 function Install-Office {
     $ids = Get-OfficeIds
     if ($ids) {
-        Warn "ya hay office instalado: $ids"
-        if (-not (Confirm-Action 'instalar igual?')) { return }
+        Warn "Ya hay Office instalado: $ids"
+        if (-not (Confirm-Action (U '\u00bfInstalar de todos modos?'))) { return }
         Write-Host ''
     }
-    Write-Host "    ${cMut}elegir version$R"
+    Write-Host "$MG $cDim$(U 'VERSI\u00d3N')$RST"
     $v = Select-Menu @(
-        @{ Key = '1'; Name = 'office 2021 ltsc'; Desc = 'word, excel, powerpoint, outlook' },
-        @{ Key = '2'; Name = 'office 2024 ltsc'; Desc = 'la mas nueva, mismas apps' }
+        @{ Key = '1'; Name = 'Office 2021 LTSC'; Desc = 'Word, Excel, PowerPoint y Outlook' },
+        @{ Key = '2'; Name = 'Office 2024 LTSC'; Desc = U 'La versi\u00f3n m\u00e1s reciente' }
     )
     if ($v -eq -1) { return }
     if ($v -eq 1) { $ch = 'PerpetualVL2024'; $prod = 'ProPlus2024Volume' } else { $ch = 'PerpetualVL2021'; $prod = 'ProPlus2021Volume' }
@@ -309,7 +304,7 @@ function Install-Office {
     $setup = Join-Path $OfficeDir 'setup.exe'
     $cfg   = Join-Path $OfficeDir 'config.xml'
     if (-not (Test-Path $setup)) {
-        Step 'descargando setup.exe de microsoft...'
+        Step 'Descargando setup.exe de Microsoft...'
         $ProgressPreference = 'SilentlyContinue'   # la barra de progreso de ps 5.1 hace la descarga muy lenta
         Invoke-WebRequest 'https://officecdn.microsoft.com/pr/wsus/setup.exe' -OutFile $setup -UseBasicParsing -ErrorAction Stop
     }
@@ -324,14 +319,14 @@ function Install-Office {
   <Display Level="Full" AcceptEULA="TRUE" />
 </Configuration>
 "@ | Set-Content -Path $cfg -Encoding ASCII
-    Step 'descargando e instalando office (puede tardar)...'
+    Step 'Descargando e instalando Office. Puede tardar varios minutos...'
     $p = Start-Process $setup -ArgumentList "/configure `"$cfg`"" -WorkingDirectory $OfficeDir -Wait -PassThru
-    if ($p.ExitCode -eq 0) { Good 'office instalado.' } else { Fail "el instalador termino con codigo $($p.ExitCode)" }
+    if ($p.ExitCode -eq 0) { Good 'Office instalado.' } else { Fail (U "El instalador termin\u00f3 con c\u00f3digo $($p.ExitCode).") }
 }
 
 # ---------- store ----------
 function Install-Store {
-    Step 'instalando microsoft store...'
+    Step 'Instalando Microsoft Store...'
     try { Start-Process wsreset.exe -ArgumentList '-i' -Wait -ErrorAction Stop } catch {}
     Start-Sleep 5
     $pkg = Get-AppxPackage -AllUsers Microsoft.WindowsStore
@@ -341,36 +336,36 @@ function Install-Store {
         }
         $pkg = Get-AppxPackage -AllUsers Microsoft.WindowsStore
     }
-    if ($pkg) { Good 'microsoft store instalada.' }
-    else { Fail 'no se pudo confirmar. revisa la conexion y reintenta, puede tardar unos minutos.' }
+    if ($pkg) { Good 'Microsoft Store instalada.' }
+    else { Fail (U 'No se pudo confirmar. Revis\u00e1 la conexi\u00f3n y reintent\u00e1; puede tardar unos minutos.') }
 }
 
 # ---------- reparacion ----------
 function Repair-Windows {
-    Warn 'puede tardar entre 10 y 30 minutos. no cerrar la ventana.'
-    if (-not (Confirm-Action 'seguir?')) { return }
+    Warn 'Puede tardar entre 10 y 30 minutos. No cierres la ventana.'
+    if (-not (Confirm-Action (U '\u00bfContinuar?'))) { return }
     Write-Host ''
-    Step 'dism: reparando la imagen de windows'
+    Step 'DISM: reparando la imagen de Windows'
     DISM.exe /Online /Cleanup-Image /RestoreHealth
-    if ($LASTEXITCODE -eq 0) { Good 'imagen de windows ok.' } else { Fail "dism termino con codigo $LASTEXITCODE" }
+    if ($LASTEXITCODE -eq 0) { Good 'Imagen de Windows correcta.' } else { Fail (U "DISM termin\u00f3 con c\u00f3digo $LASTEXITCODE.") }
     Write-Host ''
-    Step 'sfc: verificando archivos del sistema'
+    Step 'SFC: verificando archivos del sistema'
     sfc.exe /scannow
-    if ($LASTEXITCODE -eq 0) { Good 'archivos del sistema ok.' }
-    else { Warn 'sfc encontro o reparo problemas, ver el resultado de arriba. conviene reiniciar.' }
+    if ($LASTEXITCODE -eq 0) { Good 'Archivos del sistema correctos.' }
+    else { Warn (U 'SFC encontr\u00f3 o repar\u00f3 problemas (ver arriba). Conviene reiniciar.') }
 }
 
 function Reset-Network {
-    Warn 'se corta la conexion unos segundos.'
-    if (-not (Confirm-Action 'seguir?')) { return }
+    Warn (U 'La conexi\u00f3n se corta unos segundos.')
+    if (-not (Confirm-Action (U '\u00bfContinuar?'))) { return }
     Write-Host ''
-    ipconfig /flushdns | Out-Null;          Good 'cache dns vaciada'
-    netsh winsock reset | Out-Null;         Good 'winsock reiniciado'
-    netsh int ip reset | Out-Null;          Good 'pila tcp/ip reiniciada'
+    ipconfig /flushdns | Out-Null;   Good (U 'Cach\u00e9 DNS vaciada')
+    netsh winsock reset | Out-Null;  Good 'Winsock restablecido'
+    netsh int ip reset | Out-Null;   Good 'Pila TCP/IP restablecida'
     ipconfig /release | Out-Null
-    ipconfig /renew | Out-Null;             Good 'ip renovada'
+    ipconfig /renew | Out-Null;      Good 'IP renovada'
     Write-Host ''
-    Warn 'hay que reiniciar para terminar.'
+    Warn 'Hace falta reiniciar para completar el cambio.'
     Restart-Now
 }
 
@@ -378,18 +373,18 @@ function New-RestorePoint {
     Enable-ComputerRestore -Drive "$env:SystemDrive\" -ErrorAction Stop
     # windows deja crear uno cada 24 h; esto saca el limite
     Set-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SystemRestore' -Name SystemRestorePointCreationFrequency -Value 0 -Type DWord
-    Step 'creando punto de restauracion...'
-    Checkpoint-Computer -Description ("servicio tecnico {0}" -f (Get-Date -Format 'dd/MM HH:mm')) -RestorePointType MODIFY_SETTINGS -ErrorAction Stop
-    Good 'punto creado. se puede volver desde rstrui.exe'
+    Step (U 'Creando punto de restauraci\u00f3n...')
+    Checkpoint-Computer -Description ("Servicio tecnico {0}" -f (Get-Date -Format 'dd/MM HH:mm')) -RestorePointType MODIFY_SETTINGS -ErrorAction Stop
+    Good (U 'Punto creado. Se puede volver desde rstrui.exe.')
 }
 
 function Restart-Now {
-    if (Confirm-Action 'reiniciar el equipo ahora?') { Good 'reiniciando en 5 segundos...'; shutdown.exe /r /t 5 }
+    if (Confirm-Action (U '\u00bfReiniciar el equipo ahora?')) { Good 'Reiniciando en 5 segundos...'; shutdown.exe /r /t 5 }
 }
 
-# ---------- reporte ----------
+# ---------- informe ----------
 function New-Report {
-    Step 'juntando datos del equipo...'
+    Step 'Recopilando datos del equipo...'
     $os   = Get-CimInstance Win32_OperatingSystem
     $cs   = Get-CimInstance Win32_ComputerSystem
     $bios = Get-CimInstance Win32_BIOS
@@ -397,155 +392,186 @@ function New-Report {
     $cpu  = Get-CimInstance Win32_Processor | Select-Object -First 1
     $mem  = @(Get-CimInstance Win32_PhysicalMemory)
     $gpu  = @(Get-CimInstance Win32_VideoController)
-    $ddr  = @{ 20 = 'ddr'; 21 = 'ddr2'; 24 = 'ddr3'; 26 = 'ddr4'; 34 = 'ddr5' }
-    function Enc($s) { [Net.WebUtility]::HtmlEncode(([string]$s -replace 'To Be Filled By O\.E\.M\.\s*', '').Trim()) }   # H choca con el alias de Get-History
-    function Kv($k, $v) { $t = Enc $v; if (-not $t) { $t = '<small>sin dato</small>' }; "<tr><th>$k</th><td>$t</td></tr>" }
-    function Meter([int]$p, [switch]$Health) {
-        $bad = if ($Health) { 100 - $p } else { $p }
-        $c = if ($bad -lt 60) { 'ok' } elseif ($bad -lt 85) { 'warn' } else { 'bad' }
-        "<div class=bar><i class=$c style='width:$p%'></i></div>"
+    $cv   = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
+    $ddr  = @{ 20 = 'DDR'; 21 = 'DDR2'; 24 = 'DDR3'; 26 = 'DDR4'; 34 = 'DDR5' }
+    # Enc y no H: H es alias de Get-History y los alias le ganan a las funciones
+    function Enc($s) { [Net.WebUtility]::HtmlEncode(([string]$s -replace 'To Be Filled By O\.E\.M\.\s*|System Product Name|Default string|\((R|TM)\)', '').Trim()) }
+    function Row($k, $v, $sub, $tag) {
+        $t = Enc $v; if (-not $t) { $t = '<span class=na>Sin dato</span>' }
+        $s = if ($sub) { "<small>$sub</small>" } else { '' }
+        "<div class=row><div class=k>$k</div><div class=v>$t$s</div><div class=t>$tag</div></div>"
     }
-    function Kpi($label, $value, $cls) { "<div class='kpi $cls'><span>$label</span><b>$(Enc $value)</b></div>" }
+    function Tag($cls, $text) { "<span class=tag><i class='dot $cls'></i>$text</span>" }
+    function Meter([int]$p) { $c = if ($p -ge 90) { 'bad' } elseif ($p -ge 75) { 'warn' } else { '' }; "<div class=meter><i class='$c' style='width:$p%'></i></div>" }
+    function Stat($label, $value, $cls) { "<div class=stat><dt><i class='dot $cls'></i>$label</dt><dd>$(Enc $value)</dd></div>" }
 
-    Step 'discos...'
+    Step 'Analizando discos...'
     $sick = 0
     $disks = foreach ($d in Get-PhysicalDisk) {
         $rc = try { $d | Get-StorageReliabilityCounter -ErrorAction Stop } catch { $null }
         $x = @()
-        if ($null -ne $rc.Wear) { $x += "desgaste $($rc.Wear)%" }
-        if ($rc.Temperature) { $x += "$($rc.Temperature) $([char]0xB0)c" }
+        if ($null -ne $rc.Wear) { $x += "Desgaste $($rc.Wear) %" }
+        if ($rc.Temperature) { $x += "$($rc.Temperature) &deg;C" }
         if ($rc.PowerOnHours) { $x += '{0:N0} h de uso' -f $rc.PowerOnHours }
         $ok = $d.HealthStatus -eq 'Healthy'
         if (-not $ok) { $sick++ }
-        "<tr><th>$(Enc $d.FriendlyName)</th><td>$(Enc ("{0} $Md {1} $Md {2:N0} gb" -f $d.MediaType, $d.BusType, ($d.Size / 1GB)))<br><small>$(Enc ($x -join " $Md "))</small></td><td><span class='pill $(if ($ok) { 'ok' } else { 'bad' })'>$(if ($ok) { 'sano' } else { Enc $d.HealthStatus })</span></td></tr>"
+        $tag = if ($ok) { Tag 'ok' 'Sano' } else { Tag 'bad' (Enc $d.HealthStatus) }
+        Row (Enc $d.FriendlyName) ('{0} {1} {2} {3} {4:N0} GB' -f $d.MediaType, $gSep, $d.BusType, $gSep, ($d.Size / 1GB)) ($x -join ' &middot; ') $tag
     }
     $vols = foreach ($v in Get-Volume | Where-Object { $_.DriveLetter -and $_.Size -gt 0 } | Sort-Object DriveLetter) {
         $p = [int](($v.Size - $v.SizeRemaining) / $v.Size * 100)
-        "<tr><th>$($v.DriveLetter):</th><td>$(Meter $p)<small>$(Enc ("{0:N0} de {1:N0} gb usados $Md {2:N0} gb libres" -f (($v.Size - $v.SizeRemaining) / 1GB), ($v.Size / 1GB), ($v.SizeRemaining / 1GB)))</small></td></tr>"
+        $lbl = if ($v.FileSystemLabel) { " &middot; $(Enc $v.FileSystemLabel)" } else { '' }
+        "<div class=row><div class=k>$($v.DriveLetter):$lbl</div><div class=v>$('{0:N0} GB libres de {1:N0} GB' -f ($v.SizeRemaining / 1GB), ($v.Size / 1GB))$(Meter $p)</div><div class=t><span class=tag>$p % en uso</span></div></div>"
     }
 
-    Step 'bateria...'
-    $batKpi = Kpi 'bateria' 'sin bateria' ''
-    $batHtml = '<p class=muted>sin bateria (equipo de escritorio)</p>'
+    Step (U 'Leyendo bater\u00eda...')
+    $batStat = Stat 'Bater&iacute;a' (U 'Sin bater\u00eda') ''
+    $batRows = Row 'Estado' (U 'Equipo sin bater\u00eda')
     if (Get-CimInstance Win32_Battery) {
         try {
             $xf = Join-Path $env:TEMP 'st-bateria.xml'
             powercfg /batteryreport /xml /output $xf | Out-Null
             $b = @(([xml](Get-Content $xf -Raw)).BatteryReport.Batteries.Battery)[0]
             $s = [int]([double]$b.FullChargeCapacity / [double]$b.DesignCapacity * 100)
-            $batKpi = Kpi 'salud bateria' "$s%" $(if ($s -ge 80) { 'ok' } elseif ($s -ge 60) { 'warn' } else { 'bad' })
-            $batHtml = "$(Meter $s -Health)<table>$(Kv 'modelo' "$($b.Manufacturer) $($b.Id)")$(Kv 'capacidad de fabrica' ('{0:N0} mwh' -f [double]$b.DesignCapacity))$(Kv 'capacidad actual' ('{0:N0} mwh ({1}%)' -f [double]$b.FullChargeCapacity, $s))$(Kv 'ciclos de carga' $b.CycleCount)</table>"
-        } catch { $batHtml = '<p class=muted>no se pudo leer el reporte de bateria</p>' }
+            $cls = if ($s -ge 80) { 'ok' } elseif ($s -ge 60) { 'warn' } else { 'bad' }
+            $batStat = Stat 'Salud de bater&iacute;a' "$s %" $cls
+            $batRows = (Row 'Modelo' "$($b.Manufacturer) $($b.Id)") + (Row 'Capacidad de f&aacute;brica' ('{0:N0} mWh' -f [double]$b.DesignCapacity)) +
+                       (Row 'Capacidad actual' ('{0:N0} mWh' -f [double]$b.FullChargeCapacity) "$s % de la original" (Tag $cls "$s %")) + (Row 'Ciclos de carga' $b.CycleCount)
+        } catch { $batRows = Row 'Estado' (U 'No se pudo leer el informe de bater\u00eda') }
     }
 
     $ram   = [math]::Round(($mem | Measure-Object Capacity -Sum).Sum / 1GB)
-    $mods  = ($mem | ForEach-Object { '{0} gb {1} {2} mhz' -f ($_.Capacity / 1GB), $ddr[[int]$_.SMBIOSMemoryType], $_.Speed }) -join ' + '
+    $mods  = ($mem | ForEach-Object { '{0} GB {1} {2} MHz' -f ($_.Capacity / 1GB), $ddr[[int]$_.SMBIOSMemoryType], $_.Speed }) -join ' + '
     $cFree = (New-Object IO.DriveInfo $env:SystemDrive).AvailableFreeSpace / 1GB
     $up    = (Get-Date) - $os.LastBootUpTime
-    $hist  = @(Get-Content "$Base\historial.log" -Tail 12 -ErrorAction SilentlyContinue) + @(Get-Content "$Base\limpieza.log" -Tail 5 -ErrorAction SilentlyContinue)
-    $pc    = $env:COMPUTERNAME.ToLower()
-    $cv    = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
+    $hist  = @(Get-Content "$Base\historial.log" -Tail 12 -ErrorAction SilentlyContinue) + @(Get-Content "$Base\limpieza.log" -Tail 5 -ErrorAction SilentlyContinue) | Sort-Object
+    $pc    = $env:COMPUTERNAME
+    $now   = Get-Date
+    $meses = 'enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'
+    $fecha = '{0} de {1} de {2}, {3:HH:mm}' -f $now.Day, $meses[$now.Month - 1], $now.Year, $now
+    $model = Enc "$($cs.Manufacturer) $($cs.Model)"
+    if (-not $model) { $model = Enc "$($mb.Manufacturer) $($mb.Product)" }
+    $lic   = if ($Activated) { Tag 'ok' 'Activado' } else { Tag 'bad' 'Sin activar' }
 
     $html = @"
 <!doctype html><html lang=es><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
-<title>reporte $pc</title><style>
-:root{--bg:#0a0c11;--card:#11141c;--line:#1d2230;--txt:#e6e8ef;--mut:#8a90a2;--ok:#4ade80;--warn:#fbbf24;--bad:#f87171;--a1:#28dcff;--a2:#aa64ff}
-*{box-sizing:border-box}body{margin:0;background:radial-gradient(1200px 600px at 10% -10%,#16213a 0,transparent 60%),var(--bg);color:var(--txt);font:15px/1.5 "Segoe UI",system-ui,sans-serif;padding:48px 16px}
-.wrap{max-width:1040px;margin:auto}
-header{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;flex-wrap:wrap;margin-bottom:32px}
-h1{font-size:72px;line-height:.9;margin:0;font-weight:800;letter-spacing:-3px;background:linear-gradient(90deg,var(--a1),var(--a2));-webkit-background-clip:text;background-clip:text;color:transparent}
-.sub{color:var(--mut);letter-spacing:.25em;text-transform:uppercase;font-size:12px;margin-top:10px}
-.meta{text-align:right;color:var(--mut);font-size:13px}.meta b{color:var(--txt);font-size:20px;display:block}
-.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:16px}
-.kpi{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px 18px;position:relative;overflow:hidden}
-.kpi:before{content:"";position:absolute;inset:0 auto 0 0;width:3px;background:var(--line)}
-.kpi.ok:before{background:var(--ok)}.kpi.warn:before{background:var(--warn)}.kpi.bad:before{background:var(--bad)}
-.kpi span{display:block;color:var(--mut);font-size:11px;text-transform:uppercase;letter-spacing:.14em}.kpi b{font-size:22px;font-weight:600}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,440px),1fr));gap:16px}
-section{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:20px 22px}
-h2{margin:0 0 10px;font-size:12px;text-transform:uppercase;letter-spacing:.18em;color:var(--a1)}
-table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:9px 0;border-top:1px solid var(--line);vertical-align:top}
-tr:first-child th,tr:first-child td{border-top:0}th{color:var(--mut);font-weight:500;width:36%;padding-right:12px}
-small,.muted{color:var(--mut)}td:last-child{text-align:right}td:only-of-type{text-align:left}
-.bar{height:6px;background:var(--line);border-radius:6px;overflow:hidden;margin:6px 0}.bar i{display:block;height:100%;border-radius:6px}
-.bar .ok{background:var(--ok)}.bar .warn{background:var(--warn)}.bar .bad{background:var(--bad)}
-.pill{font-size:12px;padding:2px 10px;border-radius:99px;white-space:nowrap}.pill.ok{background:#4ade8022;color:var(--ok)}.pill.bad{background:#f8717122;color:var(--bad)}
-pre{margin:0;color:var(--mut);font:12px/1.7 Consolas,monospace;white-space:pre-wrap}.full{grid-column:1/-1}
-footer{margin-top:32px;color:var(--mut);font-size:12px;text-align:center}
-@media print{:root{--bg:#fff;--card:#fff;--line:#ddd;--txt:#111;--mut:#555}body{background:#fff;padding:0}}
+<title>Informe &middot; $(Enc $pc)</title>
+<link rel=preconnect href="https://fonts.googleapis.com"><link rel=preconnect href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel=stylesheet>
+<style>
+:root{--ink:#0b0b0c;--sub:#6e6e73;--faint:#a1a1a6;--line:#ececee;--tile:#f5f5f7;--ok:#22a06b;--warn:#e2a03f;--bad:#e5484d}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#fff;color:var(--ink);font:15px/1.55 Inter,-apple-system,"Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;-webkit-font-smoothing:antialiased;font-feature-settings:"cv11","ss01","tnum"}
+.wrap{max-width:860px;margin:0 auto;padding:64px 24px 88px}
+.top{display:flex;justify-content:space-between;align-items:center;gap:16px;font-size:14px;flex-wrap:wrap}
+.brand{display:flex;align-items:center;gap:10px;font-weight:500}
+.mark{width:26px;height:26px;border-radius:8px;background:var(--ink);color:#fff;display:grid;place-items:center;font-size:13px;font-weight:600}
+.top .muted,.brand span{color:var(--sub);font-weight:400}
+h1{font-size:48px;line-height:1.05;font-weight:600;letter-spacing:-.035em;margin:72px 0 14px}
+.lead{color:var(--sub);font-size:17px;letter-spacing:-.01em}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:48px 0 8px}
+.stat{background:var(--tile);border-radius:18px;padding:18px 20px 20px}
+.stat dt{color:var(--sub);font-size:13px;display:flex;align-items:center;gap:8px}
+.stat dd{font-size:22px;font-weight:600;letter-spacing:-.025em;margin-top:10px}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--faint);display:inline-block;flex:none}
+.dot.ok{background:var(--ok)}.dot.warn{background:var(--warn)}.dot.bad{background:var(--bad)}
+section{margin-top:64px}
+h2{font-size:20px;font-weight:600;letter-spacing:-.02em;margin-bottom:14px}
+.row{display:grid;grid-template-columns:210px 1fr auto;gap:20px;padding:15px 0;border-top:1px solid var(--line);align-items:baseline}
+.row:last-child{border-bottom:1px solid var(--line)}
+.k{color:var(--sub)}.v{font-weight:500}.v small{display:block;color:var(--sub);font-weight:400;font-size:13px;margin-top:3px}
+.na{color:var(--faint);font-weight:400}
+.tag{font-size:13px;color:var(--sub);display:inline-flex;align-items:center;gap:7px;white-space:nowrap}
+.meter{height:4px;background:var(--line);border-radius:4px;margin-top:12px;overflow:hidden;max-width:360px}
+.meter i{display:block;height:100%;background:var(--ink);border-radius:4px}.meter i.warn{background:var(--warn)}.meter i.bad{background:var(--bad)}
+.log{font:12.5px/1.9 ui-monospace,"Cascadia Mono",Consolas,monospace;color:var(--sub);white-space:pre-wrap;border-top:1px solid var(--line);padding-top:14px}
+footer{margin-top:88px;padding-top:20px;border-top:1px solid var(--line);display:flex;justify-content:space-between;gap:16px;color:var(--faint);font-size:13px}
+@media(max-width:640px){h1{font-size:36px}.row{grid-template-columns:1fr auto;gap:4px 16px}.k{grid-column:1/-1}}
+@media print{.wrap{padding:0}section,.stat{break-inside:avoid}}
 </style></head><body><div class=wrap>
-<header><div><h1>luca</h1><div class=sub>servicio t&eacute;cnico &middot; reporte del equipo</div></div>
-<div class=meta><b>$(Enc $pc)</b>$(Enc "$($cs.Manufacturer) $($cs.Model)")<br>$(Get-Date -Format 'dd/MM/yyyy HH:mm')</div></header>
-<div class=kpis>
-$(Kpi 'windows' $(if ($Activated) { 'activado' } else { 'sin activar' }) $(if ($Activated) { 'ok' } else { 'bad' }))
-$(Kpi 'discos' $(if ($sick) { "$sick con problemas" } else { 'todos sanos' }) $(if ($sick) { 'bad' } else { 'ok' }))
-$batKpi
-$(Kpi 'memoria' "$ram gb" '')
-$(Kpi "libre en $($env:SystemDrive)" ('{0:N0} gb' -f $cFree) $(if ($cFree -lt 15) { 'bad' } elseif ($cFree -lt 40) { 'warn' } else { 'ok' }))
-</div>
-<div class=grid>
-<section><h2>equipo</h2><table>
-$(Kv 'fabricante' $cs.Manufacturer)$(Kv 'modelo' $cs.Model)$(Kv 'numero de serie' $bios.SerialNumber)$(Kv 'placa madre' "$($mb.Manufacturer) $($mb.Product)")$(Kv 'bios' ("{0} $Md {1:dd/MM/yyyy}" -f $bios.SMBIOSBIOSVersion, $bios.ReleaseDate))
-</table></section>
-<section><h2>windows</h2><table>
-$(Kv 'version' $os.Caption)$(Kv 'compilacion' ("{0} $Md {1}" -f $(if ($cv.DisplayVersion) { $cv.DisplayVersion } else { $cv.ReleaseId }), $os.BuildNumber))$(Kv 'instalado' ('{0:dd/MM/yyyy}' -f $os.InstallDate))$(Kv 'licencia' $(if ($Activated) { 'activado' } else { 'sin activar' }))$(Kv 'encendido hace' ('{0}d {1}h {2}m' -f $up.Days, $up.Hours, $up.Minutes))
-</table></section>
-<section><h2>hardware</h2><table>
-$(Kv 'procesador' $cpu.Name)$(Kv 'nucleos' ('{0} nucleos / {1} hilos' -f $cpu.NumberOfCores, $cpu.NumberOfLogicalProcessors))$(Kv 'memoria' "$ram gb ($mods)")$(Kv 'video' (($gpu | ForEach-Object Name) -join ' + '))
-</table></section>
-<section><h2>bateria</h2>$batHtml</section>
-<section class=full><h2>discos fisicos</h2><table>$($disks -join '')</table></section>
-<section class=full><h2>unidades</h2><table>$($vols -join '')</table></section>
-<section class=full><h2>historial de servicio</h2><pre>$(Enc ($hist -join "`n"))</pre></section>
-</div><footer>generado por servicio t&eacute;cnico &middot; luca mengarelli</footer></div></body></html>
+<div class=top><div class=brand><div class=mark>L</div>Luca Mengarelli <span>&middot; Servicio t&eacute;cnico</span></div><div class=muted>$fecha</div></div>
+<h1>Informe del equipo</h1>
+<p class=lead>$(Enc $pc)$(if ($model) { " &middot; $model" })</p>
+<dl class=stats>
+$(Stat 'Windows' $(if ($Activated) { 'Activado' } else { 'Sin activar' }) $(if ($Activated) { 'ok' } else { 'bad' }))
+$(Stat 'Discos' $(if ($sick) { "$sick con fallas" } else { 'Sanos' }) $(if ($sick) { 'bad' } else { 'ok' }))
+$batStat
+$(Stat 'Memoria' "$ram GB" '')
+$(Stat "Libre en $($env:SystemDrive)" ('{0:N0} GB' -f $cFree) $(if ($cFree -lt 15) { 'bad' } elseif ($cFree -lt 40) { 'warn' } else { 'ok' }))
+</dl>
+<section><h2>Equipo</h2>
+$(Row 'Fabricante' $cs.Manufacturer)$(Row 'Modelo' $cs.Model)$(Row 'N&uacute;mero de serie' $bios.SerialNumber)$(Row 'Placa base' "$($mb.Manufacturer) $($mb.Product)")$(Row 'BIOS' $bios.SMBIOSBIOSVersion ('{0:dd/MM/yyyy}' -f $bios.ReleaseDate))
+</section>
+<section><h2>Sistema</h2>
+$(Row 'Windows' $os.Caption ('Versi&oacute;n {0} &middot; compilaci&oacute;n {1}' -f $(if ($cv.DisplayVersion) { $cv.DisplayVersion } else { $cv.ReleaseId }), $os.BuildNumber) $lic)$(Row 'Instalado' ('{0:dd/MM/yyyy}' -f $os.InstallDate))$(Row 'Encendido hace' (('{0} d {1} h {2} min' -f $up.Days, $up.Hours, $up.Minutes) -replace '^0 d (0 h )?', ''))$(Row 'Red' $Sys.Ip)
+</section>
+<section><h2>Hardware</h2>
+$(Row 'Procesador' $cpu.Name.Trim() ('{0} n&uacute;cleos &middot; {1} hilos' -f $cpu.NumberOfCores, $cpu.NumberOfLogicalProcessors))$(Row 'Memoria' "$ram GB" $mods)$(Row 'Gr&aacute;ficos' (($gpu | ForEach-Object Name) -join ', '))
+</section>
+<section><h2>Almacenamiento</h2>
+$($disks -join '')
+</section>
+<section><h2>Unidades</h2>
+$($vols -join '')
+</section>
+<section><h2>Bater&iacute;a</h2>
+$batRows
+</section>
+<section><h2>Historial de servicio</h2>
+<div class=log>$(if ($hist) { Enc ($hist -join "`n") } else { 'Sin registros todav&iacute;a.' })</div>
+</section>
+<footer><span>Luca Mengarelli &middot; Servicio t&eacute;cnico</span><span>$(Enc $pc)</span></footer>
+</div></body></html>
 "@
-    $file = Join-Path ([Environment]::GetFolderPath('Desktop')) ("reporte-{0}-{1}.html" -f $pc, (Get-Date -Format 'yyyyMMdd-HHmm'))
+    $file = Join-Path ([Environment]::GetFolderPath('Desktop')) ('Informe {0} {1}.html' -f $pc, (Get-Date -Format 'yyyy-MM-dd HHmm'))
     Set-Content -Path $file -Value $html -Encoding UTF8
-    Good "reporte guardado en el escritorio: $(Split-Path $file -Leaf)"
+    Good "Informe guardado en el escritorio: $(Split-Path $file -Leaf)"
     Start-Process $file
 }
 
 # ---------- menu ----------
 $Menu = @(
-    @{ Sec = 'herramientas'; Key = '1'; Name = 'winutil'; Desc = 'tweaks y programas de windows'
+    @{ Sec = 'HERRAMIENTAS'; Key = '1'; Name = 'WinUtil'; Desc = 'Ajustes y programas de Windows'
        Run = { Invoke-RestMethod 'https://christitus.com/win' | Invoke-Expression } },
-    @{ Sec = 'herramientas'; Key = '2'; Name = 'activar windows / office'; Desc = 'via get.activated.win'
-       Badge = { if ($Activated) { 'activado', $cOk } else { 'sin activar', $cBad } }
+    @{ Sec = 'HERRAMIENTAS'; Key = '2'; Name = 'Activar Windows y Office'; Desc = 'Mediante get.activated.win'
+       Badge = { if ($Activated) { 'Activado', $cOk } else { 'Sin activar', $cBad } }
        Run = { Invoke-RestMethod 'https://get.activated.win' | Invoke-Expression; Update-Activation } },
-    @{ Sec = 'instalar'; Key = '3'; Name = 'office ltsc'; Desc = '2021 o 2024, descarga e instala'
-       Badge = { $ids = Get-OfficeIds; if ($ids -match '20\d\d') { "$($Matches[0]) instalado", $cOk } elseif ($ids) { 'instalado', $cOk } else { 'no instalado', $cDim } }
+    @{ Sec = (U 'INSTALACI\u00d3N'); Key = '3'; Name = 'Office LTSC'; Desc = U 'Versi\u00f3n 2021 o 2024 en espa\u00f1ol'
+       Badge = { $ids = Get-OfficeIds; if ($ids -match '20\d\d') { "$($Matches[0]) instalado", $cOk } elseif ($ids) { 'Instalado', $cOk } else { 'No instalado', $cDim } }
        Run = { Install-Office } },
-    @{ Sec = 'instalar'; Key = '4'; Name = 'microsoft store'; Desc = 'instalarla en ltsc'
-       Badge = { if (Get-AppxPackage Microsoft.WindowsStore) { 'instalada', $cOk } else { 'no instalada', $cDim } }
+    @{ Sec = (U 'INSTALACI\u00d3N'); Key = '4'; Name = 'Microsoft Store'; Desc = 'Para ediciones LTSC'
+       Badge = { if (Get-AppxPackage Microsoft.WindowsStore) { 'Instalada', $cOk } else { 'No instalada', $cDim } }
        Run = { Install-Store } },
-    @{ Sec = 'mantenimiento'; Key = '5'; Name = 'limpiar ahora'; Desc = 'temporales, updates y papelera'
+    @{ Sec = 'MANTENIMIENTO'; Key = '5'; Name = 'Limpieza'; Desc = 'Temporales, actualizaciones y papelera'
        Badge = { $l = Get-Content "$Base\limpieza.log" -Tail 1 -ErrorAction SilentlyContinue
-                 if ($l) { "hace $(Get-Ago ([datetime]::ParseExact($l.Substring(0, 16), 'yyyy-MM-dd HH:mm', $null)))", $cMut } else { 'nunca', $cWarn } }
+                 if ($l) { (Get-Ago ([datetime]::ParseExact($l.Substring(0, 16), 'yyyy-MM-dd HH:mm', $null))), $cMut } else { 'Nunca', $cWarn } }
        Run = { Invoke-Clean } },
-    @{ Sec = 'mantenimiento'; Key = '6'; Name = 'limpieza automatica'; Desc = 'tarea que corre en cada inicio'
-       Badge = { if (Get-ScheduledTask -TaskName 'ServicioTecnico-Limpieza' -ErrorAction SilentlyContinue) { 'activa', $cOk } else { 'inactiva', $cDim } }
+    @{ Sec = 'MANTENIMIENTO'; Key = '6'; Name = U 'Limpieza autom\u00e1tica'; Desc = 'Se ejecuta en cada inicio'
+       Badge = { if (Get-ScheduledTask -TaskName 'ServicioTecnico-Limpieza' -ErrorAction SilentlyContinue) { 'Activa', $cOk } else { 'Inactiva', $cDim } }
        Run = { Install-CleanTask } },
-    @{ Sec = 'mantenimiento'; Key = '7'; Name = 'reparar windows'; Desc = 'dism + sfc, archivos del sistema'
+    @{ Sec = 'MANTENIMIENTO'; Key = '7'; Name = 'Reparar Windows'; Desc = 'DISM y SFC sobre archivos del sistema'
        Run = { Repair-Windows } },
-    @{ Sec = 'mantenimiento'; Key = '8'; Name = 'reiniciar red'; Desc = 'dns, winsock y tcp/ip'
+    @{ Sec = 'MANTENIMIENTO'; Key = '8'; Name = 'Restablecer red'; Desc = 'DNS, Winsock y TCP/IP'
        Run = { Reset-Network } },
-    @{ Sec = 'mantenimiento'; Key = '9'; Name = 'punto de restauracion'; Desc = 'crear uno antes de tocar algo'
+    @{ Sec = 'MANTENIMIENTO'; Key = '9'; Name = U 'Punto de restauraci\u00f3n'; Desc = 'Crear uno antes de hacer cambios'
        Badge = { $p = Get-ComputerRestorePoint -ErrorAction SilentlyContinue | Select-Object -Last 1
-                 if ($p) { "hace $(Get-Ago ([Management.ManagementDateTimeConverter]::ToDateTime($p.CreationTime)))", $cMut } else { 'ninguno', $cWarn } }
+                 if ($p) { (Get-Ago ([Management.ManagementDateTimeConverter]::ToDateTime($p.CreationTime))), $cMut } else { 'Ninguno', $cWarn } }
        Run = { New-RestorePoint } },
-    @{ Sec = 'equipo'; Key = 'r'; Name = 'reporte del equipo'; Desc = 'hardware, discos y bateria'
+    @{ Sec = 'EQUIPO'; Key = 'r'; Name = 'Informe del equipo'; Desc = U 'Hardware, discos y bater\u00eda en HTML'
        Run = { New-Report } },
-    @{ Sec = 'equipo'; Key = 'x'; Name = 'reiniciar equipo'; Desc = ''
+    @{ Sec = 'EQUIPO'; Key = 'x'; Name = 'Reiniciar equipo'; Desc = ''
        Run = { Restart-Now } },
-    @{ Sec = 'equipo'; Key = 'q'; Name = 'salir'; Desc = '' }
+    @{ Sec = 'EQUIPO'; Key = 'q'; Name = 'Salir'; Desc = '' }
 )
 
-$DescW  = if ([Console]::WindowWidth -ge 88) { 35 } else { 0 }
-$BadgeW = 16
-$W      = 32 + $DescW + $BadgeW
+$CW     = [math]::Min(92, [Console]::WindowWidth - 6)
+$BadgeW = 18
+$DescW  = [math]::Max(0, $CW - 32 - $BadgeW)
+if ($DescW -lt 16) { $DescW = 0 }
 
+Clear-Host
 Write-Host ''
-Write-Host "    ${cMut}preparando...$R"
+Write-Host "$MG$cAcc$gEdge$RST $BOLD$cWhi$Brand$RST   ${cMut}Preparando...$RST"
 Get-Static
 $cur = 0
 while ($true) {
@@ -553,20 +579,26 @@ while ($true) {
         Show-Banner
         foreach ($it in $Menu) { $it.B = if ($it.Badge) { try { & $it.Badge } catch { $null } } }
         $pick = Select-Menu $Menu $cur
-        if ($pick -eq -1 -or -not $Menu[$pick].Run) { Clear-Host; return }
+        if ($pick -eq -1 -or -not $Menu[$pick].Run) {
+            $Host.UI.RawUI.BackgroundColor = $OrigBg; $Host.UI.RawUI.ForegroundColor = $OrigFg
+            Clear-Host
+            return
+        }
         $cur = $pick
         $it = $Menu[$cur]
         Show-Header $it.Name
         $sw = [Diagnostics.Stopwatch]::StartNew()
         $res = 'ok'
         try { & $it.Run } catch { $res = 'error'; Fail $_.Exception.Message }
-        Write-Log ('{0}: {1} ({2:N0}s)' -f $it.Name, $res, $sw.Elapsed.TotalSeconds)
-        $t = if ($sw.Elapsed.TotalMinutes -ge 1) { '{0}m {1}s' -f [int][math]::Floor($sw.Elapsed.TotalMinutes), $sw.Elapsed.Seconds } else { '{0}s' -f $sw.Elapsed.Seconds }
+        Write-Log ('{0}: {1} ({2:N0} s)' -f $it.Name, $res, $sw.Elapsed.TotalSeconds)
+        $t = if ($sw.Elapsed.TotalMinutes -ge 1) { '{0} min {1} s' -f [int][math]::Floor($sw.Elapsed.TotalMinutes), $sw.Elapsed.Seconds } else { '{0} s' -f $sw.Elapsed.Seconds }
         Write-Host ''
-        Write-Host "    $cDim$Ln$Ln $t $Md enter para volver$R"
+        Rule
+        $fin = if ($res -eq 'ok') { "$cOk$gDot$RST ${cTxt}Finalizado en $t" } else { "$cBad$gX$RST ${cTxt}Finalizado con errores en $t" }
+        Write-Host "$MG$fin$RST     $(Key 'Enter') ${cMut}Volver al panel$RST"
     } catch {
-        Fail ('error: {0}' -f $_.Exception.Message)
-        Write-Host "    ${cDim}enter para volver$R"
+        Fail ('Error: {0}' -f $_.Exception.Message)
+        Write-Host "$MG$(Key 'Enter') ${cMut}Volver al panel$RST"
     }
     do { $k = [Console]::ReadKey($true) } until ($k.Key -eq 'Enter' -or $k.Key -eq 'Escape')
 }
