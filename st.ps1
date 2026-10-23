@@ -41,14 +41,14 @@ try { $Host.PrivateData.ProgressBackgroundColor = 'Black'; $Host.PrivateData.Pro
 
 $RST    = "$e[0m$BGDEF"
 $BOLD   = "$e[1m"
-$BGSEL  = BgRgb 22 27 40
+$BGSEL  = BgRgb 38 26 16
 $BGKEY  = (BgRgb 36 38 48) + (Rgb 225 225 232)
-$cAcc   = Rgb 88 170 255
+$cAcc   = Rgb 255 170 60
 $cWhi   = Rgb 245 245 247
 $cTxt   = Rgb 214 214 220
-$cMut   = Rgb 138 138 150
-$cDim   = Rgb 84 86 100
-$cLine  = Rgb 64 68 86
+$cMut   = Rgb 150 142 134
+$cDim   = Rgb 98 90 82
+$cLine  = Rgb 70 60 52
 $cOk    = Rgb 61 220 151
 $cWarn  = Rgb 245 184 65
 $cBad   = Rgb 255 92 92
@@ -96,76 +96,279 @@ function Get-Loader([int]$i, [int]$w = 16) {
     "$cLine$($gHeavy * $p)$cAcc$($gHeavy * $seg)$cLine$($gHeavy * ($span - $p))$RST"
 }
 
-# ---------- logo ----------
-# tipografia de 5x7 pixeles; cada caracter de consola dibuja 2 pixeles con medio bloque, asi quedan cuadrados
+# ---------- panel led ----------
+# tipografia de 5x7 puntos para el nombre
 $Font = @{
     'L' = '#....', '#....', '#....', '#....', '#....', '#....', '#####'
     'U' = '#...#', '#...#', '#...#', '#...#', '#...#', '#...#', '.###.'
     'C' = '.####', '#....', '#....', '#....', '#....', '#....', '.####'
     'A' = '.###.', '#...#', '#...#', '#####', '#...#', '#...#', '#...#'
-    'M' = '#.....#', '##...##', '#.#.#.#', '#..#..#', '#.....#', '#.....#', '#.....#'
+    'M' = '#...#', '##.##', '#.#.#', '#.#.#', '#...#', '#...#', '#...#'
     'E' = '#####', '#....', '#....', '####.', '#....', '#....', '#####'
-    'N' = '#....#', '##...#', '#.#..#', '#..#.#', '#...##', '#....#', '#....#'
+    'N' = '#...#', '##..#', '#.#.#', '#..##', '#...#', '#...#', '#...#'
     'G' = '.####', '#....', '#....', '#..##', '#...#', '#...#', '.###.'
     'R' = '####.', '#...#', '#...#', '####.', '#.#..', '#..#.', '#...#'
     'I' = '###', '.#.', '.#.', '.#.', '.#.', '.#.', '###'
     ' ' = '...', '...', '...', '...', '...', '...', '...'
 }
-$Grad = @(@(62, 242, 192), @(58, 160, 255), @(170, 110, 255))
 
-function Get-GradColor([double]$t) {
-    $t = [math]::Max(0, [math]::Min(1, $t)) * ($Grad.Count - 1)
-    $i = [math]::Min([int][math]::Floor($t), $Grad.Count - 2); $f = $t - $i
-    $a = $Grad[$i]; $z = $Grad[$i + 1]
-    , @(($a[0] + ($z[0] - $a[0]) * $f), ($a[1] + ($z[1] - $a[1]) * $f), ($a[2] + ($z[2] - $a[2]) * $f))
-}
+# el render va en c# porque powershell solo no llega a 20 cuadros por segundo
+$LedSrc = @'
+using System;
+using System.Text;
+using System.Collections.Generic;
 
-# precalcula el color de cada pixel: letra con degrade (mas clara arriba) y sombra 3d abajo a la derecha
-function Initialize-Logo([string]$text) {
-    $rows = for ($y = 0; $y -lt 7; $y++) { ($text.ToCharArray() | ForEach-Object { $Font[[string]$_][$y] }) -join '.' }
-    $w = $rows[0].Length
-    $script:LogoW = $w + 1
-    $script:LogoPx = @(); $script:LogoOn = @()
-    for ($y = 0; $y -lt 8; $y++) {
-        $px = New-Object object[] ($w + 1); $lit = New-Object bool[] ($w + 1)
-        for ($x = 0; $x -le $w; $x++) {
-            $isOn = $y -lt 7 -and $x -lt $w -and $rows[$y][$x] -eq '#'
-            if ($isOn) {
-                $c = Get-GradColor ($x / ($w - 1)); $k = (1 - $y / 6) * .25
-                $px[$x] = @(($c[0] + (255 - $c[0]) * $k), ($c[1] + (255 - $c[1]) * $k), ($c[2] + (255 - $c[2]) * $k)); $lit[$x] = $true
-            } elseif ($x -ge 1 -and $y -ge 1 -and $rows[$y - 1][$x - 1] -eq '#') {
-                $c = Get-GradColor (($x - 1) / ($w - 1))
-                $px[$x] = @(($c[0] * .2), ($c[1] * .2), ($c[2] * .3))
+// acuario led: un framebuffer de pixeles cuadrados que se dibuja con medios bloques (2 pixeles por caracter)
+public class Aquarium
+{
+    public int W, Rows, PH;
+    public double IntroEnd = 5.4;
+    bool intro;
+    string reset, bgDef, margin;
+    Random rnd = new Random(11);
+    List<double[]> bubbles = new List<double[]>();   // x, y, velocidad, fase, brillo, tamano
+    List<int[]> namePx = new List<int[]>();
+    List<double[]> nameFrom = new List<double[]>();  // x0, y0, demora
+    string[] fg = new string[14], bg = new string[14];
+    double lastT = -1;
+    double[,] I, G;
+
+    public Aquarium(int w, int rows, bool intro, string[] nameRows, int scale, string reset, string bgDef, string margin)
+    {
+        W = w; Rows = rows; PH = rows * 2; this.intro = intro;
+        this.reset = reset; this.bgDef = bgDef; this.margin = margin;
+        I = new double[PH, W]; G = new double[PH, W];
+        for (int q = 0; q < 14; q++) { string c = Ramp(q / 10.0); fg[q] = "\x1b[38;2;" + c + "m"; bg[q] = "\x1b[48;2;" + c + "m"; }
+
+        int bw = nameRows[0].Length * scale, bh = nameRows.Length * scale;
+        int ox = Math.Max(0, (W - bw) / 2);
+        int oy = intro ? (int)(PH * 0.40 - bh / 2.0) : (PH - bh) / 2;
+        for (int r = 0; r < nameRows.Length; r++)
+            for (int c = 0; c < nameRows[r].Length; c++)
+            {
+                if (nameRows[r][c] != '#') continue;
+                for (int sy = 0; sy < scale; sy++)
+                    for (int sx = 0; sx < scale; sx++)
+                    {
+                        int x = ox + c * scale + sx, y = oy + r * scale + sy;
+                        if (x < 0 || x >= W || y < 0 || y >= PH) continue;
+                        namePx.Add(new int[] { x, y });
+                        // cada pixel del nombre sube desde abajo, como una burbuja, y se acomoda en su lugar
+                        nameFrom.Add(new double[] { x + (rnd.NextDouble() - 0.5) * W * 0.5, PH + rnd.NextDouble() * PH * 0.6, rnd.NextDouble() * 0.5 + (double)x / W * 0.6 });
+                    }
             }
-        }
-        $script:LogoPx += , $px; $script:LogoOn += , $lit
     }
-}
 
-# 4 lineas de texto; $shine es la columna del brillo que barre, $reveal hasta donde se ve
-function Get-Logo([double]$shine = -99, [int]$reveal = 9999) {
-    for ($row = 0; $row -lt 4; $row++) {
-        $sb = New-Object Text.StringBuilder
-        [void]$sb.Append($MG)
-        for ($x = 0; $x -lt $LogoW; $x++) {
-            $pp = @($null, $null)
-            for ($h = 0; $h -lt 2; $h++) {
-                $y = 2 * $row + $h
-                $c = $LogoPx[$y][$x]
-                if ($null -eq $c -or $x -gt $reveal) { continue }
-                if ($LogoOn[$y][$x]) {
-                    $d = [math]::Abs($x - $shine + $y * .7)
-                    if ($d -lt 3) { $k = (1 - $d / 3) * .9; $c = @(($c[0] + (255 - $c[0]) * $k), ($c[1] + (255 - $c[1]) * $k), ($c[2] + (255 - $c[2]) * $k)) }
+    // ambar: tenue, naranja, y casi blanco cuando se pasa de 1 (destellos)
+    static string Ramp(double v)
+    {
+        if (v <= 0) return "40;26;16";
+        int r, g, b;
+        if (v <= 0.6) { double f = v / 0.6; r = (int)(70 + 185 * f); g = (int)(30 + 108 * f); b = (int)(8 + 30 * f); }
+        else if (v <= 1.0) { double f = (v - 0.6) / 0.4; r = 255; g = (int)(138 + 72 * f); b = (int)(38 + 100 * f); }
+        else { double f = Math.Min(1, (v - 1) / 0.3); r = 255; g = (int)(210 + 40 * f); b = (int)(138 + 100 * f); }
+        return r + ";" + g + ";" + b;
+    }
+
+    void Plot(double x, double y, double v)
+    {
+        int ix = (int)Math.Round(x), iy = (int)Math.Round(y);
+        if (ix >= 0 && ix < W && iy >= 0 && iy < PH && v > I[iy, ix]) I[iy, ix] = v;
+    }
+
+    static double HalfWidth(double u, double L)
+    {
+        double s = u / (0.62 * L);
+        if (s < 0 || s > 1) return -1;
+        return 0.21 * L * Math.Pow(Math.Sin(Math.PI * s), 0.55) * (1 - 0.3 * s) + 0.4;
+    }
+
+    // pez dorado procedural: cuerpo, cola abierta con rayos, aletas que ondulan, escamas y ojo
+    void Fish(double hx, double hy, double ang, double L, double t, int seed)
+    {
+        double ca = Math.Cos(ang), sa = Math.Sin(ang);
+        int x0 = (int)(hx - 1.3 * L), x1 = (int)(hx + 1.3 * L), y0 = (int)(hy - 1.3 * L), y1 = (int)(hy + 1.3 * L);
+        for (int y = Math.Max(0, y0); y <= Math.Min(PH - 1, y1); y++)
+            for (int x = Math.Max(0, x0); x <= Math.Min(W - 1, x1); x++)
+            {
+                double dx = x - hx, dy = y - hy;
+                double u = -(dx * ca + dy * sa);          // distancia hacia la cola
+                double v = -dx * sa + dy * ca;            // lateral (negativo = lomo)
+                if (u < -1 || u > 1.08 * L) continue;
+                double w = v - L * 0.07 * Math.Sin(u / L * 5.5 - t * 9 + seed) * Math.Pow(Math.Max(0, u / L), 1.5);
+                double val = 0, hw = HalfWidth(u, L);
+
+                if (hw > 0 && Math.Abs(w) <= hw)
+                {
+                    val = 0.92 - 0.22 * (w / hw);                                   // lomo mas claro
+                    val += 0.12 * Math.Sin(u * 1.4 + seed) * Math.Sin(w * 1.6);       // escamas
+                    if (((int)(u * 0.8 + w * 0.5 + 400 + seed * 3)) % 6 == 0 && u > 0.3 * L) val -= 0.35;   // vetas oscuras
+                    if (Math.Abs(u - 0.24 * L) < 0.6 && Math.Abs(w) < hw * 0.85) val *= 0.5;   // agalla
+                    double ex = u - 0.11 * L, ey = w + 0.06 * L;
+                    if (ex * ex + ey * ey < Math.Max(1.1, 0.0016 * L * L)) val = 0;            // ojo
                 }
-                $pp[$h] = '{0};{1};{2}' -f [int]$c[0], [int]$c[1], [int]$c[2]
+                else if (u > 0.55 * L)
+                {
+                    double f = (u - 0.55 * L) / (0.5 * L), tw = L * (0.06 + 0.32 * f);
+                    if (Math.Abs(w) < tw && !(f > 0.62 && Math.Abs(w) < (f - 0.62) * L * 0.55))
+                        val = (0.45 + 0.4 * Math.Abs(Math.Sin(w * 0.75 + t * 2))) * (1 - 0.35 * f);
+                }
+                if (val == 0 && u > 0.16 * L && u < 0.52 * L)
+                {
+                    double g = (u - 0.16 * L) / (0.36 * L), h = HalfWidth(u, L);
+                    double top = h + L * 0.17 * Math.Sin(Math.PI * g) * (1 + 0.15 * Math.Sin(t * 5 + u));
+                    if (w < -h && w > -top) val = 0.5 + 0.25 * Math.Abs(Math.Sin(u * 0.9));          // aleta dorsal
+                    double bot = h + L * 0.09 * Math.Sin(Math.PI * g);
+                    if (g > 0.45 && w > h && w < bot) val = 0.45;                                       // aleta ventral
+                }
+                if (val > I[y, x]) I[y, x] = val;
             }
-            if (-not $pp[0] -and -not $pp[1]) { [void]$sb.Append("$BGDEF ") }
-            elseif (-not $pp[1]) { [void]$sb.Append("$BGDEF$e[38;2;$($pp[0])m$gTop") }
-            elseif (-not $pp[0]) { [void]$sb.Append("$BGDEF$e[38;2;$($pp[1])m$gBot") }
-            else { [void]$sb.Append("$e[38;2;$($pp[0]);48;2;$($pp[1])m$gTop") }
-        }
-        $sb.Append($RST).ToString()
+        if (rnd.NextDouble() < 0.06) bubbles.Add(new double[] { hx + ca * 2, hy + sa * 2, 6 + rnd.NextDouble() * 4, rnd.NextDouble() * 6.3, 0.8, 0 });
     }
+
+    public string Frame(double t)
+    {
+        double dt = lastT < 0 ? 0 : Math.Max(0, Math.Min(0.2, t - lastT));
+        lastT = t;
+        Array.Clear(I, 0, I.Length);
+
+        // burbujas: columnas a los costados en la intro, sueltas en el encabezado
+        double rate = intro ? 26 : 3;
+        int n = (int)(rate * dt) + (rnd.NextDouble() < rate * dt % 1 ? 1 : 0);
+        for (int k = 0; k < n; k++)
+        {
+            double bx = intro && t < 2.4 && rnd.NextDouble() < 0.7 ? (rnd.Next(2) == 0 ? W * 0.07 : W * 0.93) + (rnd.NextDouble() - 0.5) * W * 0.06 : rnd.NextDouble() * W;
+            bubbles.Add(new double[] { bx, PH + 1, (intro ? 10 : 5) + rnd.NextDouble() * 10, rnd.NextDouble() * 6.3, 0.5 + rnd.NextDouble() * 0.5, rnd.NextDouble() < 0.2 ? 1 : 0 });
+        }
+        for (int i = bubbles.Count - 1; i >= 0; i--)
+        {
+            double[] b = bubbles[i];
+            b[1] -= b[2] * dt;
+            if (b[1] < -2) { bubbles.RemoveAt(i); continue; }
+            double bx = b[0] + Math.Sin(t * 3 + b[3]) * 0.8;
+            Plot(bx, b[1], b[4]);
+            if (b[5] > 0) { Plot(bx + 1, b[1], b[4] * 0.8); Plot(bx, b[1] + 1, b[4] * 0.8); Plot(bx + 1, b[1] + 1, b[4] * 0.6); }
+        }
+
+        // peces (antes que el nombre: nadan por detras de las letras)
+        if (intro)
+        {
+            double L = Math.Min(46, W * 0.36), sp = (W + 2.6 * L) / 3.8;
+            double xa = -0.4 * L + t * sp, xb = -0.9 * L + (t - 0.5) * sp * 1.05;
+            Fish(xa, PH * 0.72 - xa * 0.18 + 2 * Math.Sin(t * 1.3), -0.17 + 0.05 * Math.Cos(t * 1.3), L, t, 0);
+            Fish(xb, PH * 0.38 - xb * 0.08 + 2 * Math.Sin(t * 1.1 + 2), -0.08 + 0.04 * Math.Cos(t * 1.1 + 2), L * 0.78, t, 5);
+        }
+        else
+        {
+            double cyc = (t - 4) % 40;
+            if (t > 4 && cyc < 4)
+            {
+                double L = 15, x = -L + cyc * (W + 2.2 * L) / 4;
+                Fish(x, PH * 0.55 + Math.Sin(t * 1.4) * 2, 0.04 * Math.Cos(t * 1.4), L, t, 3);
+            }
+        }
+
+        // nombre: en la intro cada pixel sube y se acomoda; ya ubicado, tapa lo que pase por detras
+        double start = 2.0;
+        for (int i = 0; i < namePx.Count; i++)
+        {
+            int x = namePx[i][0], y = namePx[i][1];
+            double shimmer = 0.8 + 0.2 * Math.Sin(t * 2.2 - x * 0.12 + y * 0.3);
+            if (!intro) { I[y, x] = shimmer; continue; }
+            double p = (t - start - nameFrom[i][2]) / 1.1;
+            if (p <= 0) continue;
+            if (p >= 1)
+            {
+                double since = (p - 1) * 1.1;
+                I[y, x] = shimmer + Math.Max(0, 0.45 - since * 0.9);   // destello al llegar
+                continue;
+            }
+            double e = 1 - Math.Pow(1 - p, 3);
+            Plot(nameFrom[i][0] + (x - nameFrom[i][0]) * e, nameFrom[i][1] + (y - nameFrom[i][1]) * e, 0.55 + 0.4 * p);
+        }
+
+        // chispas sueltas
+        if (rnd.NextDouble() < 0.7) Plot(rnd.Next(W), rnd.Next(PH), 0.3 + rnd.NextDouble() * 0.3);
+
+        // resplandor: los pixeles apagados junto a uno encendido brillan un poco
+        for (int y = 0; y < PH; y++)
+            for (int x = 0; x < W; x++)
+            {
+                double v = I[y, x];
+                if (v < 0.12)
+                {
+                    double m = 0;
+                    if (x > 0) m = Math.Max(m, I[y, x - 1]);
+                    if (x < W - 1) m = Math.Max(m, I[y, x + 1]);
+                    if (y > 0) m = Math.Max(m, I[y - 1, x]);
+                    if (y < PH - 1) m = Math.Max(m, I[y + 1, x]);
+                    v = Math.Max(v, m * 0.16);
+                }
+                G[y, x] = v;
+            }
+
+        StringBuilder sb = new StringBuilder(W * Rows * 10);
+        for (int r = 0; r < Rows; r++)
+        {
+            sb.Append(margin);
+            int cf = -1, cb = -1;   // color actual de frente y fondo (-1 = sin definir, -2 = fondo de la consola)
+            for (int x = 0; x < W; x++)
+            {
+                int a = Q(G[2 * r, x]), b = Q(G[2 * r + 1, x]);
+                char ch;
+                int wf, wb;
+                if (a == 0 && b == 0) { ch = (x & 1) == 0 ? '\u00b7' : ' '; wf = 0; wb = -2; }
+                else if (b == 0) { ch = '\u2580'; wf = a; wb = -2; }
+                else if (a == 0) { ch = '\u2584'; wf = b; wb = -2; }
+                else { ch = '\u2580'; wf = a; wb = b; }
+                if (wb != cb) { sb.Append(wb == -2 ? bgDef : bg[wb]); cb = wb; }
+                if (wf != cf) { sb.Append(fg[wf]); cf = wf; }
+                sb.Append(ch);
+            }
+            sb.Append(reset);
+            if (r < Rows - 1) sb.Append("\r\n");
+        }
+        return sb.ToString();
+    }
+
+    static int Q(double v) { return (int)Math.Round(Math.Max(0, Math.Min(1.3, v)) * 10); }
+}
+'@
+
+# bitmap del nombre: una o mas lineas centradas, separadas por 2 filas vacias
+function Get-NameRows([string[]]$lines) {
+    $blocks = New-Object Collections.Generic.List[object]
+    foreach ($l in $lines) { $blocks.Add([string[]]@(for ($y = 0; $y -lt 7; $y++) { ($l.ToCharArray() | ForEach-Object { $Font[[string]$_][$y] }) -join '.' })) }
+    $w = 0; foreach ($bk in $blocks) { $w = [math]::Max($w, $bk[0].Length) }
+    $all = New-Object Collections.Generic.List[string]
+    for ($k = 0; $k -lt $blocks.Count; $k++) {
+        if ($k) { $all.Add('.' * $w); $all.Add('.' * $w) }
+        foreach ($r in $blocks[$k]) { $p = [int][math]::Floor(($w - $r.Length) / 2); $all.Add(('.' * $p) + $r + ('.' * ($w - $r.Length - $p))) }
+    }
+    , $all.ToArray()
+}
+
+function Initialize-Led {
+    try {
+        if (-not ('Aquarium' -as [type])) { Add-Type -TypeDefinition $LedSrc -Language CSharp -ErrorAction Stop }
+        $wide = [Console]::WindowWidth -ge 98
+        $script:Led = [Aquarium]::new($CW, 8, $false, (Get-NameRows $(if ($wide) { 'LUCA MENGARELLI' } else { 'LUCA' })), 1, $RST, $BGDEF, $MG)
+        # intro a pantalla completa; el nombre va en dos lineas y al doble si entra
+        $iw = [Console]::WindowWidth - 4
+        $rows = Get-NameRows 'LUCA', 'MENGARELLI'
+        $scale = if ($rows[0].Length * 2 -le $iw - 2) { 2 } else { 1 }
+        $script:IntroLed = [Aquarium]::new($iw, [math]::Max(10, [Console]::WindowHeight - 9), $true, $rows, $scale, $RST, $BGDEF, '  ')
+    } catch { $script:Led = $null; $script:IntroLed = $null }   # sin compilador c#: arranca sin animacion
+    $script:LedClock = [Diagnostics.Stopwatch]::StartNew()
+    $script:LedSkip = 0
+}
+function Get-LedTime { $LedClock.Elapsed.TotalSeconds + $LedSkip }
+
+# redibuja el panel en su lugar sin mover el resto de la pantalla
+function Write-Led {
+    if (-not $Led) { return }
+    [Console]::SetCursorPosition(0, $LedTop)
+    [Console]::Write($Led.Frame((Get-LedTime)))
 }
 
 function Write-Tagline([string]$right = '') {
@@ -175,7 +378,7 @@ function Write-Tagline([string]$right = '') {
 }
 
 # ---------- arranque ----------
-# los datos lentos se piden en paralelo (runspaces) mientras se anima cada linea
+# los datos lentos se piden en paralelo (runspaces) mientras corre la intro; cualquier tecla la saltea
 function Show-Intro {
     $jobs = [ordered]@{
         'Sistema'    = { $os = Get-CimInstance Win32_OperatingSystem; $cv = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
@@ -188,35 +391,42 @@ function Show-Intro {
 
     Clear-Host
     Write-Host ''
-    $top = [Console]::CursorTop
-    [Console]::CursorVisible = $false
-    for ($s = -6; $s -le $LogoW + 8; $s += 3) {
-        [Console]::SetCursorPosition(0, $top)
-        [Console]::Write(((Get-Logo $s $s) -join "`r`n"))
-        Start-Sleep -Milliseconds 6
-    }
-    [Console]::SetCursorPosition(0, $top)
-    [Console]::Write(((Get-Logo) -join "`r`n") + "`r`n")
+    $introTop = [Console]::CursorTop
+    if ($IntroLed) { [Console]::Write($IntroLed.Frame(0) + "`r`n") }
     Write-Tagline 'Luca Mengarelli'
     Write-Host ''
+    $bootTop = [Console]::CursorTop
+    Write-Host "`n`n`n"
+    $introEnd = if ($IntroLed) { $IntroLed.IntroEnd + 0.4 } else { 0 }
 
-    $res = @{}
-    $i = 0
-    foreach ($j in $run) {
-        while (-not $j.H.IsCompleted) {
-            [Console]::Write("`r$MG$cDim$gRing$RST $cMut$($j.Name.PadRight(12))$RST$(Get-Loader $i)$e[K")
-            Start-Sleep -Milliseconds 40; $i++
+    $res = @{}; $shown = @{}; $i = 0
+    [Console]::CursorVisible = $false
+    while ($true) {
+        if ([Console]::KeyAvailable) {
+            [void][Console]::ReadKey($true)
+            $t = Get-LedTime
+            if ($t -lt $introEnd) { $script:LedSkip += $introEnd - $t }
         }
-        $out = @(try { $j.Ps.EndInvoke($j.H) } catch { }); $j.Ps.Dispose()
-        $res[$j.Name] = $out
-        $val = switch ($j.Name) {
-            'Sistema'    { '{0} {1}' -f ($out[0] -replace '^Microsoft\s+', ''), $out[1] }
-            'Procesador' { "$($out[0])".Trim() }
-            'Red'        { if ($out[0]) { "$($out[0])" } else { U 'Sin conexi\u00f3n' } }
-            'Licencia'   { if ("$($out[0])" -eq 'True') { 'Windows activado' } else { 'Windows sin activar' } }
+        if ($IntroLed) { [Console]::SetCursorPosition(0, $introTop); [Console]::Write($IntroLed.Frame((Get-LedTime))) }
+        $row = 0
+        foreach ($j in $run) {
+            if (-not $res.ContainsKey($j.Name) -and $j.H.IsCompleted) {
+                $out = @(try { $j.Ps.EndInvoke($j.H) } catch { }); $j.Ps.Dispose()
+                $res[$j.Name] = $out
+                $shown[$j.Name] = switch ($j.Name) {
+                    'Sistema'    { '{0} {1}' -f ("$($out[0])" -replace '^Microsoft\s+', ''), $out[1] }
+                    'Procesador' { "$($out[0])".Trim() }
+                    'Red'        { if ($out[0]) { "$($out[0])" } else { U 'Sin conexi\u00f3n' } }
+                    'Licencia'   { if ("$($out[0])" -eq 'True') { 'Windows activado' } else { 'Windows sin activar' } }
+                }
+            }
+            [Console]::SetCursorPosition(0, $bootTop + $row)
+            if ($shown.ContainsKey($j.Name)) { [Console]::Write("$MG$cOk$gDot$RST $cMut$($j.Name.PadRight(12))$RST$cTxt$($shown[$j.Name])$RST$e[K") }
+            else { [Console]::Write("$MG$cDim$gRing$RST $cMut$($j.Name.PadRight(12))$RST$(Get-Loader ($i + $row * 5))$e[K") }
+            $row++
         }
-        [Console]::Write("`r$MG$cOk$gDot$RST $cMut$($j.Name.PadRight(12))$RST$cTxt$val$RST$e[K`r`n")
-        Start-Sleep -Milliseconds 70
+        if ($res.Count -eq $run.Count -and (Get-LedTime) -ge $introEnd) { break }
+        Start-Sleep -Milliseconds 30; $i++
     }
     [Console]::CursorVisible = $true
 
@@ -230,7 +440,7 @@ function Show-Intro {
         Cores = U ('{0} n\u00facleos {1} {2} hilos' -f $c[1], $gSep, $c[2])
         Ip    = if ($res['Red'][0]) { "$($res['Red'][0])" } else { 'Sin red' }
     }
-    Start-Sleep -Milliseconds 450
+    Start-Sleep -Milliseconds 350
 }
 
 function Update-Activation {
@@ -266,7 +476,8 @@ function Show-Banner {
     $onS  = if ($on.TotalDays -ge 1) { '{0} d {1} h' -f $on.Days, $on.Hours } else { '{0} h {1} min' -f $on.Hours, $on.Minutes }
 
     Write-Host ''
-    Write-Host ($LogoLines -join "`r`n")
+    $script:LedTop = [Console]::CursorTop
+    if ($Led) { [Console]::Write($Led.Frame((Get-LedTime)) + "`r`n") }
     Write-Tagline "Encendido $onS  $gSep  $(Get-Date -Format 'HH:mm')"
     Write-Host ''
 
@@ -334,6 +545,7 @@ function Select-Menu($Items, [int]$Index = 0, [switch]$Main) {
             [Console]::SetCursorPosition(0, $top)
             [Console]::Write($sb.ToString())
 
+            while (-not [Console]::KeyAvailable) { if ($Main) { Write-Led }; Start-Sleep -Milliseconds 45 }
             $k = [Console]::ReadKey($true)
             $c0 = $pos[$Index][0]; $r0 = $pos[$Index][1]
             $same = @($vis | Where-Object { $pos[$_][0] -eq $c0 })
@@ -745,8 +957,15 @@ $Menu = @(
 )
 
 # nombre completo si entra; si la ventana es angosta, solo "LUCA"
-Initialize-Logo $(if ([Console]::WindowWidth -ge 98) { 'LUCA MENGARELLI' } else { 'LUCA' })
-$LogoLines = @(Get-Logo)
+# si la ventana es baja se agranda para que entre el panel (en windows terminal no se puede y se ignora)
+try {
+    $ws = $Host.UI.RawUI.WindowSize
+    if ($ws.Height -lt 36 -and $Host.UI.RawUI.MaxPhysicalWindowSize.Height -ge 36) { $Host.UI.RawUI.WindowSize = New-Object Management.Automation.Host.Size $ws.Width, 36 }
+} catch {}
+Clear-Host
+Write-Host ''
+Write-Host "$MG$cAcc$gHeavy$gHeavy$RST  ${cMut}Preparando...$RST"
+Initialize-Led
 Show-Intro
 $cur = 0
 while ($true) {
