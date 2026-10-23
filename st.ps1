@@ -127,6 +127,21 @@ $FontSmall = @{
     ' ' = '..', '..', '..', '..', '..'
 }
 
+# negrita (trazos de 2 columnas) para el nombre del encabezado cuando la ventana es ancha
+$FontBold = @{
+    'L' = '##....', '##....', '##....', '##....', '######'
+    'U' = '##..##', '##..##', '##..##', '##..##', '.####.'
+    'C' = '.#####', '##....', '##....', '##....', '.#####'
+    'A' = '.####.', '##..##', '######', '##..##', '##..##'
+    'M' = '##...##', '###.###', '##.#.##', '##...##', '##...##'
+    'E' = '######', '##....', '#####.', '##....', '######'
+    'N' = '##...##', '###..##', '##.#.##', '##..###', '##...##'
+    'G' = '.#####', '##....', '##.###', '##..##', '.#####'
+    'R' = '#####.', '##..##', '#####.', '##.##.', '##..##'
+    'I' = '##', '##', '##', '##', '##'
+    ' ' = '...', '...', '...', '...', '...'
+}
+
 # el render va en c# porque powershell solo no llega a 20 cuadros por segundo
 $LedSrc = @'
 using System;
@@ -146,7 +161,7 @@ public class Aquarium
     List<double[]> trail = new List<double[]>();     // x, y, nacimiento
     List<int[]> namePx = new List<int[]>();
     List<double[]> nameFrom = new List<double[]>();  // x0, y0, demora
-    string[] fg = new string[24], bg = new string[24];
+    string[] fg = new string[25], bg = new string[25];
     double lastT = -1;
     double[,] I;
     int[,] K;
@@ -164,9 +179,9 @@ public class Aquarium
         I = new double[PH, W]; K = new int[PH, W]; Bub = new bool[PH, W]; Tr = new double[Rows, W];
         this.mascot = mascot; mx = -20; targetX = W * 0.3; stateEnd = 1e9;
 
-        // 0-13 escala azul; 14-21 mascota y su compu; 22-23 baldosas
-        string[] fixedColors = { "217;119;87", "232;145;112", "176;88;62", "24;20;20", "170;175;185", "95;100;112", "40;90;160", "150;220;255", "14;22;40", "20;34;62" };
-        for (int q = 0; q < 24; q++) { string c = q < 14 ? Ramp(q / 10.0) : fixedColors[q - 14]; fg[q] = "\x1b[38;2;" + c + "m"; bg[q] = "\x1b[48;2;" + c + "m"; }
+        // 0-13 escala azul; 14-21 mascota y su compu; 22-23 baldosas; 24 blanco de la bandera
+        string[] fixedColors = { "217;119;87", "232;145;112", "176;88;62", "24;20;20", "170;175;185", "95;100;112", "40;90;160", "150;220;255", "14;22;40", "20;34;62", "235;235;240" };
+        for (int q = 0; q < 25; q++) { string c = q < 14 ? Ramp(q / 10.0) : fixedColors[q - 14]; fg[q] = "\x1b[38;2;" + c + "m"; bg[q] = "\x1b[48;2;" + c + "m"; }
 
         int bw = nameRows[0].Length * sx, bh = nameRows.Length;
         int ox = Math.Max(0, (W - bw) / 2);
@@ -370,35 +385,37 @@ public class Aquarium
     // ---- mascota de claude: camina, salta, parpadea y se sienta a laburar con su compu ----
     bool mascot;
     double mx, targetX, stateEnd, jumpAt = -9, nextBlink = 2;
-    int mState = 0, facing = 1;   // 0 camina, 1 trabaja, 2 mira
+    int mState = 0, facing = 1;   // 0 camina, 1 trabaja, 2 mira, 3 festeja con la bandera
+    // claw'd: cuerpo de 8x6, brazos de 2 a cada lado, ojos en la segunda fila y 4 patitas
     static readonly string[] Body = {
-        ".#######.",
-        ".#e###e#.",
-        "a#######a",
-        ".#######."
+        "..########..",
+        "..#e####e#..",
+        "aa########aa",
+        "aa########aa",
+        "..########..",
+        "..########..",
+        "..l.l..l.l..",
+        "..l.l..l.l.."
     };
     static readonly string[] Laptop = {
-        "..DDDDDDDD..",
-        "..DSSSSSSD..",
-        "..DSSSSSSD..",
-        "..DSSSSSSD..",
-        "..DSSSSSSD..",
-        "..DDDDDDDD..",
-        ".KKKKKKKKKK.",
-        "KKKKKKKKKKKK"
+        ".DDDDDDDD.",
+        ".DSSSSSSD.",
+        ".DSSSSSSD.",
+        ".DSSSSSSD.",
+        ".DDDDDDDD.",
+        "KKKKKKKKKK"
     };
-    const int MS = 2;   // cada pixel de la mascota ocupa 2x2
 
     void Put(int x, int y, int c) { if (x >= 0 && x < W && y >= 0 && y < PH) K[y, x] = c; }
-    void PutBig(int sx, int sy, int c) { for (int dy = 0; dy < MS; dy++) for (int dx = 0; dx < MS; dx++) Put(sx + dx, sy + dy, c); }
 
     void DrawMascot(double t, double dt)
     {
-        int mw = 9 * MS, lw = Laptop[0].Length;
+        int mw = Body[0].Length, lw = Laptop[0].Length;
         if (t >= stateEnd)
         {
             double roll = rnd.NextDouble();
-            if (mState != 1 && roll < 0.45)
+            if (mState == 1 && roll < 0.5) { mState = 3; stateEnd = t + 2.6; }   // termino de laburar: festeja
+            else if (mState != 1 && roll < 0.45)
             {   // se sienta mirando hacia donde hay lugar para la compu
                 mState = 1; stateEnd = t + 5 + rnd.NextDouble() * 4;
                 facing = mx + mw + lw + 2 > W ? -1 : (mx - lw - 2 < 0 ? 1 : (rnd.Next(2) == 0 ? 1 : -1));
@@ -412,39 +429,46 @@ public class Aquarium
         }
         if (mState == 0)
         {
-            mx += facing * 9 * dt;
+            mx += facing * 8 * dt;
             if ((facing > 0 && mx >= targetX) || (facing < 0 && mx <= targetX)) { mx = targetX; stateEnd = t; }
             if (rnd.NextDouble() < dt * 0.25) jumpAt = t;
         }
+        if (mState == 3 && t - jumpAt > 0.9) jumpAt = t;   // saltitos de festejo
         double jt = t - jumpAt;
-        int lift = jt >= 0 && jt < 0.5 ? (int)Math.Round(7 * Math.Sin(Math.PI * jt / 0.5)) : 0;
+        int lift = jt >= 0 && jt < 0.45 ? (int)Math.Round(5 * Math.Sin(Math.PI * jt / 0.45)) : 0;
         if (t > nextBlink + 0.13) nextBlink = t + 2 + rnd.NextDouble() * 3;
         bool blink = t > nextBlink;
 
         int ox = (int)Math.Round(mx), floor = PH - 1;
-        int top = floor - 5 * MS + 1 - lift;
+        int top = floor - Body.Length + 1 - lift;
         bool step = ((int)(t / 0.14)) % 2 == 0;
         bool typing = mState == 1;
         bool armUp = ((int)(t / 0.11)) % 2 == 0;
 
         for (int r = 0; r < Body.Length; r++)
-            for (int c = 0; c < 9; c++)
+            for (int c = 0; c < mw; c++)
             {
                 char ch = Body[r][c];
                 if (ch == '.') continue;
-                int col = r == 0 ? 15 : (r == 3 ? 16 : 14), ry = r;
+                int col = 14, ry = r;   // un solo naranja, como el original
                 if (ch == 'e') col = blink ? 14 : 17;
-                if (ch == 'a' && typing && (c == 0) == armUp) ry = r - 1;   // tecleando, los bracitos suben alternados
-                PutBig(ox + c * MS, top + ry * MS, col);
+                if (ch == 'a' && typing && (c < 2) == armUp) ry = r - 1;   // tecleando, los bracitos suben alternados
+                if (ch == 'a' && mState == 3 && c >= 10) ry = r - 2;        // festejando, brazo derecho arriba
+                if (ch == 'l' && r == 7 && mState == 0 && lift == 0 && ((c == 2 || c == 7) == step)) continue;   // al caminar levanta un par de patas
+                Put(ox + c, top + ry, col);
             }
-        // patas: las 4 quieto, alternadas al caminar
-        int[] legs = { 2, 3, 5, 6 };
-        for (int i = 0; i < 4; i++)
-        {
-            if (mState == 0 && lift == 0 && (i % 2 == 0) == step) continue;
-            PutBig(ox + legs[i] * MS, top + 4 * MS, 16);
-        }
 
+        if (mState == 3)
+        {   // bandera a cuadros flameando sobre el brazo levantado
+            int px = ox + 11, py = top - 1;
+            for (int k = 0; k < 7; k++) Put(px, py - k, 18);   // mastil gris (el negro no se ve sobre la consola)
+            for (int r = 0; r < 3; r++)
+                for (int c = 0; c < 5; c++)
+                {
+                    int wave = (int)Math.Round(Math.Sin(t * 8 + c * 0.9) * 0.6);
+                    Put(px - 5 + c, py - 6 + r + wave, (r + c) % 2 == 0 ? 19 : 24);
+                }
+        }
         if (!typing) return;
         int lx = facing > 0 ? ox + mw + 1 : ox - lw - 1, ly = floor - Laptop.Length + 1, frame = (int)(t / 0.75);
         for (int r = 0; r < Laptop.Length; r++)
@@ -455,13 +479,12 @@ public class Aquarium
                 int col = ch == 'D' ? 19 : (ch == 'K' ? 18 : 20);
                 if (ch == 'S')
                 {   // lineas de codigo que cambian mientras escribe
-                    int line = r - 1, len = (int)(Hash(frame * 7 + line * 13) * 5) + 1, indent = (int)(Hash(line * 31 + frame) * 2);
-                    if (c - 3 >= indent && c - 3 < indent + len) col = 21;
+                    int line = r - 1, len = (int)(Hash(frame * 7 + line * 13) * 4) + 1, indent = (int)(Hash(line * 31 + frame) * 2);
+                    if (c - 2 >= indent && c - 2 < indent + len) col = 21;
                 }
                 Put(lx + c, ly + r, col);
             }
     }
-
     static int Q(double v) { return (int)Math.Round(Math.Max(0, Math.Min(1.3, v)) * 10); }
 }
 '@
@@ -483,8 +506,10 @@ function Initialize-Led {
     try {
         if (-not ('Aquarium' -as [type])) { Add-Type -TypeDefinition $LedSrc -Language CSharp -ErrorAction Stop }
         $wide = [Console]::WindowWidth -ge 98
-        # encabezado: nombre arriba y la mascota de claude dando vueltas abajo
-        $script:Led = [Aquarium]::new($CW, 10, $false, (Get-NameRows $(if ($wide) { 'LUCA MENGARELLI' } else { 'LUCA' }) $FontSmall), 1, $RST, $BGDEF, $MG, $true)
+        # encabezado: nombre arriba (en negrita si entra) y la mascota de claude dando vueltas abajo
+        $name = Get-NameRows 'LUCA MENGARELLI' $FontBold
+        if ($name[0].Length + 4 -gt [Console]::WindowWidth - 5) { $name = Get-NameRows $(if ($wide) { 'LUCA MENGARELLI' } else { 'LUCA' }) $FontSmall }
+        $script:Led = [Aquarium]::new([math]::Min([Console]::WindowWidth - 5, [math]::Max($CW, $name[0].Length + 4)), 10, $false, $name, 1, $RST, $BGDEF, $MG, $true)
         # intro a pantalla completa; el nombre va en dos lineas y al doble de ancho si entra
         $iw = [Console]::WindowWidth - 4
         $rows = Get-NameRows 'LUCA', 'MENGARELLI'
@@ -494,6 +519,7 @@ function Initialize-Led {
     $script:LedClock = [Diagnostics.Stopwatch]::StartNew()
     $script:LedSkip = 0
 }
+
 function Get-LedTime { $LedClock.Elapsed.TotalSeconds + $LedSkip }
 
 # redibuja el panel en su lugar sin mover el resto de la pantalla
