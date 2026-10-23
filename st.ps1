@@ -41,14 +41,14 @@ try { $Host.PrivateData.ProgressBackgroundColor = 'Black'; $Host.PrivateData.Pro
 
 $RST    = "$e[0m$BGDEF"
 $BOLD   = "$e[1m"
-$BGSEL  = BgRgb 38 26 16
+$BGSEL  = BgRgb 16 28 50
 $BGKEY  = (BgRgb 36 38 48) + (Rgb 225 225 232)
-$cAcc   = Rgb 255 170 60
+$cAcc   = Rgb 90 170 255
 $cWhi   = Rgb 245 245 247
 $cTxt   = Rgb 214 214 220
-$cMut   = Rgb 150 142 134
-$cDim   = Rgb 98 90 82
-$cLine  = Rgb 70 60 52
+$cMut   = Rgb 142 150 166
+$cDim   = Rgb 90 98 116
+$cLine  = Rgb 50 58 76
 $cOk    = Rgb 61 220 151
 $cWarn  = Rgb 245 184 65
 $cBad   = Rgb 255 92 92
@@ -60,7 +60,7 @@ $gTL    = [string][char]0x256D; $gTR   = [string][char]0x256E; $gBL   = [string]
 $gBR    = [string][char]0x256F; $gV    = [string][char]0x2502; $gPlay = [string][char]0x25B8
 $gTop   = [string][char]0x2580; $gBot  = [string][char]0x2584; $gRing = [string][char]0x25CB
 $MG     = '   '
-$CW     = 92
+$CW     = [math]::Min(92, [Console]::WindowWidth - 5)
 $Brand  = U 'Servicio T\u00e9cnico'
 $Host.UI.RawUI.WindowTitle = "$Brand $gSep Luca Mengarelli"
 
@@ -112,13 +112,29 @@ $Font = @{
     ' ' = '...', '...', '...', '...', '...', '...', '...'
 }
 
+# version de 5 filas para el encabezado, donde cada punto ocupa una celda entera
+$FontSmall = @{
+    'L' = '#...', '#...', '#...', '#...', '####'
+    'U' = '#..#', '#..#', '#..#', '#..#', '.##.'
+    'C' = '.###', '#...', '#...', '#...', '.###'
+    'A' = '.##.', '#..#', '####', '#..#', '#..#'
+    'M' = '#...#', '##.##', '#.#.#', '#...#', '#...#'
+    'E' = '####', '#...', '###.', '#...', '####'
+    'N' = '#..#', '##.#', '#.##', '#..#', '#..#'
+    'G' = '.###', '#...', '#.##', '#..#', '.###'
+    'R' = '###.', '#..#', '###.', '#.#.', '#..#'
+    'I' = '###', '.#.', '.#.', '.#.', '###'
+    ' ' = '..', '..', '..', '..', '..'
+}
+
 # el render va en c# porque powershell solo no llega a 20 cuadros por segundo
 $LedSrc = @'
 using System;
 using System.Text;
 using System.Collections.Generic;
 
-// acuario led: un framebuffer de pixeles cuadrados que se dibuja con medios bloques (2 pixeles por caracter)
+// acuario ascii: la escena se calcula en pixeles cuadrados (2 por caracter de alto) y cada celda
+// se dibuja con un caracter segun lo que la cubre: simbolos densos sobre una baldosa, ' y . en los bordes
 public class Aquarium
 {
     public int W, Rows, PH;
@@ -126,49 +142,63 @@ public class Aquarium
     bool intro;
     string reset, bgDef, margin;
     Random rnd = new Random(11);
-    List<double[]> bubbles = new List<double[]>();   // x, y, velocidad, fase, brillo, tamano
+    List<double[]> bubbles = new List<double[]>();   // x, y, velocidad, fase, brillo
+    List<double[]> trail = new List<double[]>();     // x, y, nacimiento
     List<int[]> namePx = new List<int[]>();
     List<double[]> nameFrom = new List<double[]>();  // x0, y0, demora
-    string[] fg = new string[14], bg = new string[14];
+    string[] fg = new string[24], bg = new string[24];
     double lastT = -1;
-    double[,] I, G;
+    double[,] I;
+    int[,] K;
+    bool[,] Bub;
+    double[,] Tr;
 
-    public Aquarium(int w, int rows, bool intro, string[] nameRows, int scale, string reset, string bgDef, string margin)
+    const string Dense = "$%SX&#8@$%SX";
+    const string Mid = "xts+=";
+
+    // nameRows: bitmap del nombre (# = punto). cada punto ocupa sx columnas y una fila entera
+    public Aquarium(int w, int rows, bool intro, string[] nameRows, int sx, string reset, string bgDef, string margin, bool mascot)
     {
         W = w; Rows = rows; PH = rows * 2; this.intro = intro;
         this.reset = reset; this.bgDef = bgDef; this.margin = margin;
-        I = new double[PH, W]; G = new double[PH, W];
-        for (int q = 0; q < 14; q++) { string c = Ramp(q / 10.0); fg[q] = "\x1b[38;2;" + c + "m"; bg[q] = "\x1b[48;2;" + c + "m"; }
+        I = new double[PH, W]; K = new int[PH, W]; Bub = new bool[PH, W]; Tr = new double[Rows, W];
+        this.mascot = mascot; mx = -20; targetX = W * 0.3; stateEnd = 1e9;
 
-        int bw = nameRows[0].Length * scale, bh = nameRows.Length * scale;
+        // 0-13 escala azul; 14-21 mascota y su compu; 22-23 baldosas
+        string[] fixedColors = { "217;119;87", "232;145;112", "176;88;62", "24;20;20", "170;175;185", "95;100;112", "40;90;160", "150;220;255", "14;22;40", "20;34;62" };
+        for (int q = 0; q < 24; q++) { string c = q < 14 ? Ramp(q / 10.0) : fixedColors[q - 14]; fg[q] = "\x1b[38;2;" + c + "m"; bg[q] = "\x1b[48;2;" + c + "m"; }
+
+        int bw = nameRows[0].Length * sx, bh = nameRows.Length;
         int ox = Math.Max(0, (W - bw) / 2);
-        int oy = intro ? (int)(PH * 0.40 - bh / 2.0) : (PH - bh) / 2;
+        int oy = intro ? (int)(Rows * 0.42 - bh / 2.0) : 0;
         for (int r = 0; r < nameRows.Length; r++)
             for (int c = 0; c < nameRows[r].Length; c++)
             {
                 if (nameRows[r][c] != '#') continue;
-                for (int sy = 0; sy < scale; sy++)
-                    for (int sx = 0; sx < scale; sx++)
+                for (int k = 0; k < sx; k++)
+                    for (int h = 0; h < 2; h++)
                     {
-                        int x = ox + c * scale + sx, y = oy + r * scale + sy;
+                        int x = ox + c * sx + k, y = 2 * (oy + r) + h;
                         if (x < 0 || x >= W || y < 0 || y >= PH) continue;
                         namePx.Add(new int[] { x, y });
-                        // cada pixel del nombre sube desde abajo, como una burbuja, y se acomoda en su lugar
+                        // cada punto del nombre sube desde abajo, como una burbuja, y se acomoda en su lugar
                         nameFrom.Add(new double[] { x + (rnd.NextDouble() - 0.5) * W * 0.5, PH + rnd.NextDouble() * PH * 0.6, rnd.NextDouble() * 0.5 + (double)x / W * 0.6 });
                     }
             }
     }
 
-    // ambar: tenue, naranja, y casi blanco cuando se pasa de 1 (destellos)
+    // azul: tenue, azul electrico, y casi blanco cuando se pasa de 1 (destellos)
     static string Ramp(double v)
     {
-        if (v <= 0) return "40;26;16";
+        if (v <= 0) return "22;30;48";
         int r, g, b;
-        if (v <= 0.6) { double f = v / 0.6; r = (int)(70 + 185 * f); g = (int)(30 + 108 * f); b = (int)(8 + 30 * f); }
-        else if (v <= 1.0) { double f = (v - 0.6) / 0.4; r = 255; g = (int)(138 + 72 * f); b = (int)(38 + 100 * f); }
-        else { double f = Math.Min(1, (v - 1) / 0.3); r = 255; g = (int)(210 + 40 * f); b = (int)(138 + 100 * f); }
+        if (v <= 0.6) { double f = v / 0.6; r = (int)(30 + 10 * f); g = (int)(60 + 60 * f); b = (int)(130 + 125 * f); }
+        else if (v <= 1.0) { double f = (v - 0.6) / 0.4; r = (int)(40 + 90 * f); g = (int)(120 + 80 * f); b = 255; }
+        else { double f = Math.Min(1, (v - 1) / 0.3); r = (int)(130 + 100 * f); g = (int)(200 + 45 * f); b = 255; }
         return r + ";" + g + ";" + b;
     }
+
+    static double Hash(int n) { n = (n << 13) ^ n; return ((n * (n * n * 15731 + 789221) + 1376312589) & 0x7fffffff) / 2147483647.0; }
 
     void Plot(double x, double y, double v)
     {
@@ -176,54 +206,52 @@ public class Aquarium
         if (ix >= 0 && ix < W && iy >= 0 && iy < PH && v > I[iy, ix]) I[iy, ix] = v;
     }
 
-    static double HalfWidth(double u, double L)
-    {
-        double s = u / (0.62 * L);
-        if (s < 0 || s > 1) return -1;
-        return 0.21 * L * Math.Pow(Math.Sin(Math.PI * s), 0.55) * (1 - 0.3 * s) + 0.4;
-    }
-
-    // pez dorado procedural: cuerpo, cola abierta con rayos, aletas que ondulan, escamas y ojo
-    void Fish(double hx, double hy, double ang, double L, double t, int seed)
+    // tiburon de perfil: hocico en punta, aleta dorsal, pectoral, cola en medialuna, ojo y branquias
+    void Shark(double hx, double hy, double ang, double L, double t, int seed)
     {
         double ca = Math.Cos(ang), sa = Math.Sin(ang);
-        int x0 = (int)(hx - 1.3 * L), x1 = (int)(hx + 1.3 * L), y0 = (int)(hy - 1.3 * L), y1 = (int)(hy + 1.3 * L);
+        int x0 = (int)(hx - 1.1 * L), x1 = (int)(hx + 1.1 * L), y0 = (int)(hy - 1.1 * L), y1 = (int)(hy + 1.1 * L);
         for (int y = Math.Max(0, y0); y <= Math.Min(PH - 1, y1); y++)
             for (int x = Math.Max(0, x0); x <= Math.Min(W - 1, x1); x++)
             {
                 double dx = x - hx, dy = y - hy;
                 double u = -(dx * ca + dy * sa);          // distancia hacia la cola
                 double v = -dx * sa + dy * ca;            // lateral (negativo = lomo)
-                if (u < -1 || u > 1.08 * L) continue;
-                double w = v - L * 0.07 * Math.Sin(u / L * 5.5 - t * 9 + seed) * Math.Pow(Math.Max(0, u / L), 1.5);
-                double val = 0, hw = HalfWidth(u, L);
-
-                if (hw > 0 && Math.Abs(w) <= hw)
+                if (u < 0 || u > L) continue;
+                double w = v - L * 0.05 * Math.Sin(u / L * 4 - t * 6 + seed) * (u / L) * (u / L);
+                double s = u / (0.84 * L);
+                double hw = s <= 1 ? 0.12 * L * Math.Pow(Math.Sin(Math.PI * s), 0.65) + 0.3 : 0;
+                double val = 0;
+                if (s <= 1 && Math.Abs(w) <= hw)
                 {
-                    val = 0.92 - 0.22 * (w / hw);                                   // lomo mas claro
-                    val += 0.12 * Math.Sin(u * 1.4 + seed) * Math.Sin(w * 1.6);       // escamas
-                    if (((int)(u * 0.8 + w * 0.5 + 400 + seed * 3)) % 6 == 0 && u > 0.3 * L) val -= 0.35;   // vetas oscuras
-                    if (Math.Abs(u - 0.24 * L) < 0.6 && Math.Abs(w) < hw * 0.85) val *= 0.5;   // agalla
-                    double ex = u - 0.11 * L, ey = w + 0.06 * L;
-                    if (ex * ex + ey * ey < Math.Max(1.1, 0.0016 * L * L)) val = 0;            // ojo
+                    val = 0.72 + 0.3 * (w / hw);                                        // panza mas clara
+                    double ex = u - 0.09 * L, ey = w + 0.035 * L;
+                    if (ex * ex + ey * ey < Math.Max(0.8, 0.0009 * L * L)) val = 0.15;  // ojo
+                    for (int g = 0; g < 3; g++)
+                        if (Math.Abs(u - (0.2 + g * 0.035) * L) < 0.45 && Math.Abs(w) < hw * 0.6) val = 0.25;   // branquias
                 }
-                else if (u > 0.55 * L)
+                else
                 {
-                    double f = (u - 0.55 * L) / (0.5 * L), tw = L * (0.06 + 0.32 * f);
-                    if (Math.Abs(w) < tw && !(f > 0.62 && Math.Abs(w) < (f - 0.62) * L * 0.55))
-                        val = (0.45 + 0.4 * Math.Abs(Math.Sin(w * 0.75 + t * 2))) * (1 - 0.35 * f);
-                }
-                if (val == 0 && u > 0.16 * L && u < 0.52 * L)
-                {
-                    double g = (u - 0.16 * L) / (0.36 * L), h = HalfWidth(u, L);
-                    double top = h + L * 0.17 * Math.Sin(Math.PI * g) * (1 + 0.15 * Math.Sin(t * 5 + u));
-                    if (w < -h && w > -top) val = 0.5 + 0.25 * Math.Abs(Math.Sin(u * 0.9));          // aleta dorsal
-                    double bot = h + L * 0.09 * Math.Sin(Math.PI * g);
-                    if (g > 0.45 && w > h && w < bot) val = 0.45;                                       // aleta ventral
+                    if (u > 0.28 * L && u < 0.5 * L)
+                    {   // aleta dorsal
+                        double pk = u < 0.43 * L ? (u - 0.28 * L) / (0.15 * L) : (0.5 * L - u) / (0.07 * L);
+                        if (w < -hw && w > -hw - 0.24 * L * pk) val = 0.55;
+                    }
+                    if (u > 0.2 * L && u < 0.42 * L)
+                    {   // aleta pectoral
+                        double pk = u < 0.3 * L ? (u - 0.2 * L) / (0.1 * L) : (0.42 * L - u) / (0.12 * L);
+                        if (w > hw && w < hw + 0.15 * L * pk) val = Math.Max(val, 0.6);
+                    }
+                    if (u > 0.8 * L)
+                    {   // cola: lobulo de arriba mas largo
+                        double f = (u - 0.8 * L) / (0.2 * L), up = 0.3 * L * f, dn = 0.18 * L * f, th = 0.05 * L + 0.04 * L * (1 - f);
+                        if ((w < 0 && -w < up && -w > up - th) || (w >= 0 && w < dn && w > dn - th) || Math.Abs(w) < 0.03 * L + 0.5) val = Math.Max(val, 0.6);
+                    }
                 }
                 if (val > I[y, x]) I[y, x] = val;
             }
-        if (rnd.NextDouble() < 0.06) bubbles.Add(new double[] { hx + ca * 2, hy + sa * 2, 6 + rnd.NextDouble() * 4, rnd.NextDouble() * 6.3, 0.8, 0 });
+        // estela de guiones detras de la cola
+        if (rnd.NextDouble() < 0.7) trail.Add(new double[] { hx - ca * L + (rnd.NextDouble() - 0.5) * 3, hy - sa * L + (rnd.NextDouble() - 0.5) * 4, t });
     }
 
     public string Frame(double t)
@@ -231,96 +259,104 @@ public class Aquarium
         double dt = lastT < 0 ? 0 : Math.Max(0, Math.Min(0.2, t - lastT));
         lastT = t;
         Array.Clear(I, 0, I.Length);
+        Array.Clear(Bub, 0, Bub.Length);
+        Array.Clear(Tr, 0, Tr.Length);
 
-        // burbujas: columnas a los costados en la intro, sueltas en el encabezado
-        double rate = intro ? 26 : 3;
+        // burbujas: columnas a los costados al empezar la intro, sueltas el resto del tiempo
+        double rate = intro ? 18 : 2.5;
         int n = (int)(rate * dt) + (rnd.NextDouble() < rate * dt % 1 ? 1 : 0);
         for (int k = 0; k < n; k++)
         {
-            double bx = intro && t < 2.4 && rnd.NextDouble() < 0.7 ? (rnd.Next(2) == 0 ? W * 0.07 : W * 0.93) + (rnd.NextDouble() - 0.5) * W * 0.06 : rnd.NextDouble() * W;
-            bubbles.Add(new double[] { bx, PH + 1, (intro ? 10 : 5) + rnd.NextDouble() * 10, rnd.NextDouble() * 6.3, 0.5 + rnd.NextDouble() * 0.5, rnd.NextDouble() < 0.2 ? 1 : 0 });
+            double bx = intro && t < 2.4 && rnd.NextDouble() < 0.7 ? (rnd.Next(2) == 0 ? W * 0.06 : W * 0.94) + (rnd.NextDouble() - 0.5) * W * 0.05 : rnd.NextDouble() * W;
+            bubbles.Add(new double[] { bx, PH + 1, (intro ? 10 : 5) + rnd.NextDouble() * 10, rnd.NextDouble() * 6.3, 0.5 + rnd.NextDouble() * 0.5 });
         }
         for (int i = bubbles.Count - 1; i >= 0; i--)
         {
             double[] b = bubbles[i];
             b[1] -= b[2] * dt;
             if (b[1] < -2) { bubbles.RemoveAt(i); continue; }
-            double bx = b[0] + Math.Sin(t * 3 + b[3]) * 0.8;
-            Plot(bx, b[1], b[4]);
-            if (b[5] > 0) { Plot(bx + 1, b[1], b[4] * 0.8); Plot(bx, b[1] + 1, b[4] * 0.8); Plot(bx + 1, b[1] + 1, b[4] * 0.6); }
+            int bx = (int)Math.Round(b[0] + Math.Sin(t * 3 + b[3]) * 0.8), by = (int)Math.Round(b[1]);
+            if (bx >= 0 && bx < W && by >= 0 && by < PH) Bub[by, bx] = true;
         }
 
-        // peces (antes que el nombre: nadan por detras de las letras)
+        // tiburones (antes que el nombre: nadan por detras de las letras)
         if (intro)
         {
-            double L = Math.Min(46, W * 0.36), sp = (W + 2.6 * L) / 3.8;
-            double xa = -0.4 * L + t * sp, xb = -0.9 * L + (t - 0.5) * sp * 1.05;
-            Fish(xa, PH * 0.72 - xa * 0.18 + 2 * Math.Sin(t * 1.3), -0.17 + 0.05 * Math.Cos(t * 1.3), L, t, 0);
-            Fish(xb, PH * 0.38 - xb * 0.08 + 2 * Math.Sin(t * 1.1 + 2), -0.08 + 0.04 * Math.Cos(t * 1.1 + 2), L * 0.78, t, 5);
+            double L = Math.Min(54, W * 0.45), cx = W / 2.0, cy = PH / 2.0;
+            double ta = -2.7 + t * 0.75, rx = W * 0.40, ry = PH * 0.40;
+            Shark(cx + rx * Math.Cos(ta), cy + ry * Math.Sin(ta), Math.Atan2(ry * Math.Cos(ta), -rx * Math.Sin(ta)), L, t, 0);
+            double tb = 0.5 - t * 0.6, rx2 = W * 0.33, ry2 = PH * 0.30;
+            Shark(cx + rx2 * Math.Cos(tb), cy + ry2 * Math.Sin(tb), Math.Atan2(-ry2 * Math.Cos(tb), rx2 * Math.Sin(tb)), L * 0.75, t, 4);
         }
         else
         {
-            double cyc = (t - 4) % 40;
-            if (t > 4 && cyc < 4)
+            double cyc = (t - 6) % 45;
+            if (t > 6 && cyc < 7)
             {
-                double L = 15, x = -L + cyc * (W + 2.2 * L) / 4;
-                Fish(x, PH * 0.55 + Math.Sin(t * 1.4) * 2, 0.04 * Math.Cos(t * 1.4), L, t, 3);
+                double L = 30, x = -0.2 * L + cyc * (W + 1.4 * L) / 7;
+                Shark(x, PH * 0.45 + Math.Sin(t * 1.2) * 2, 0.06 * Math.Cos(t * 1.2), L, t, 2);
             }
         }
 
-        // nombre: en la intro cada pixel sube y se acomoda; ya ubicado, tapa lo que pase por detras
+        // nombre: en la intro cada punto sube y se acomoda; ya ubicado, tapa lo que pase por detras
         double start = 2.0;
         for (int i = 0; i < namePx.Count; i++)
         {
             int x = namePx[i][0], y = namePx[i][1];
-            double shimmer = 0.8 + 0.2 * Math.Sin(t * 2.2 - x * 0.12 + y * 0.3);
+            double shimmer = 0.78 + 0.22 * Math.Sin(t * 2.2 - x * 0.12 + y * 0.15);
             if (!intro) { I[y, x] = shimmer; continue; }
             double p = (t - start - nameFrom[i][2]) / 1.1;
             if (p <= 0) continue;
-            if (p >= 1)
-            {
-                double since = (p - 1) * 1.1;
-                I[y, x] = shimmer + Math.Max(0, 0.45 - since * 0.9);   // destello al llegar
-                continue;
-            }
+            if (p >= 1) { I[y, x] = shimmer + Math.Max(0, 0.45 - (p - 1) * 1.1 * 0.9); continue; }   // destello al llegar
             double e = 1 - Math.Pow(1 - p, 3);
             Plot(nameFrom[i][0] + (x - nameFrom[i][0]) * e, nameFrom[i][1] + (y - nameFrom[i][1]) * e, 0.55 + 0.4 * p);
         }
 
-        // chispas sueltas
-        if (rnd.NextDouble() < 0.7) Plot(rnd.Next(W), rnd.Next(PH), 0.3 + rnd.NextDouble() * 0.3);
+        // estela: guiones que se apagan
+        for (int i = trail.Count - 1; i >= 0; i--)
+        {
+            double age = t - trail[i][2];
+            if (age > 1.6 || age < 0) { trail.RemoveAt(i); continue; }
+            int tx = (int)Math.Round(trail[i][0]), ty = (int)Math.Round(trail[i][1]) / 2;
+            if (tx >= 0 && tx < W && ty >= 0 && ty < Rows) Tr[ty, tx] = Math.Max(Tr[ty, tx], 0.7 - age * 0.4);
+        }
 
-        // resplandor: los pixeles apagados junto a uno encendido brillan un poco
         for (int y = 0; y < PH; y++)
-            for (int x = 0; x < W; x++)
-            {
-                double v = I[y, x];
-                if (v < 0.12)
-                {
-                    double m = 0;
-                    if (x > 0) m = Math.Max(m, I[y, x - 1]);
-                    if (x < W - 1) m = Math.Max(m, I[y, x + 1]);
-                    if (y > 0) m = Math.Max(m, I[y - 1, x]);
-                    if (y < PH - 1) m = Math.Max(m, I[y + 1, x]);
-                    v = Math.Max(v, m * 0.16);
-                }
-                G[y, x] = v;
-            }
+            for (int x = 0; x < W; x++) K[y, x] = Q(I[y, x]);
+        if (mascot) DrawMascot(t, dt);
 
         StringBuilder sb = new StringBuilder(W * Rows * 10);
+        int slot = (int)(t * 3);
         for (int r = 0; r < Rows; r++)
         {
             sb.Append(margin);
             int cf = -1, cb = -1;   // color actual de frente y fondo (-1 = sin definir, -2 = fondo de la consola)
             for (int x = 0; x < W; x++)
             {
-                int a = Q(G[2 * r, x]), b = Q(G[2 * r + 1, x]);
+                int a = K[2 * r, x], b = K[2 * r + 1, x];
                 char ch;
-                int wf, wb;
-                if (a == 0 && b == 0) { ch = (x & 1) == 0 ? '\u00b7' : ' '; wf = 0; wb = -2; }
-                else if (b == 0) { ch = '\u2580'; wf = a; wb = -2; }
-                else if (a == 0) { ch = '\u2584'; wf = b; wb = -2; }
-                else { ch = '\u2580'; wf = a; wb = b; }
+                int wf, wb = -2;
+                if (a >= 14 || b >= 14)
+                {   // mascota: pixel art solido con medios bloques
+                    if (a == 0) { ch = '\u2584'; wf = b; }
+                    else if (b == 0) { ch = '\u2580'; wf = a; }
+                    else { ch = '\u2580'; wf = a; wb = b; }
+                }
+                else
+                {
+                    double va = I[2 * r, x], vb = I[2 * r + 1, x], m = Math.Max(va, vb);
+                    if (va >= 0.06 && vb >= 0.06)
+                    {   // celda llena: simbolo denso sobre baldosa; algunos cambian de a ratos
+                        int h = x * 7919 + r * 104729;
+                        if (Hash(h + slot) < 0.04) h += slot;
+                        ch = m < 0.32 ? ':' : (m < 0.6 ? Mid[(int)(Hash(h) * Mid.Length)] : Dense[(int)(Hash(h) * Dense.Length)]);
+                        wf = Q(m); wb = m < 0.6 ? 22 : 23;
+                    }
+                    else if (m >= 0.06) { ch = va >= 0.06 ? (m > 0.6 ? '"' : '\'') : (m > 0.6 ? ',' : '.'); wf = Q(m); }
+                    else if (Bub[2 * r, x] || Bub[2 * r + 1, x]) { ch = 'o'; wf = 7; }
+                    else if (Tr[r, x] > 0.05) { ch = Tr[r, x] > 0.45 ? '-' : '.'; wf = Q(Tr[r, x]); }
+                    else { ch = (x & 1) == 0 ? '\u00b7' : ' '; wf = 0; }
+                }
                 if (wb != cb) { sb.Append(wb == -2 ? bgDef : bg[wb]); cb = wb; }
                 if (wf != cf) { sb.Append(fg[wf]); cf = wf; }
                 sb.Append(ch);
@@ -331,14 +367,109 @@ public class Aquarium
         return sb.ToString();
     }
 
+    // ---- mascota de claude: camina, salta, parpadea y se sienta a laburar con su compu ----
+    bool mascot;
+    double mx, targetX, stateEnd, jumpAt = -9, nextBlink = 2;
+    int mState = 0, facing = 1;   // 0 camina, 1 trabaja, 2 mira
+    static readonly string[] Body = {
+        ".#######.",
+        ".#e###e#.",
+        "a#######a",
+        ".#######."
+    };
+    static readonly string[] Laptop = {
+        "..DDDDDDDD..",
+        "..DSSSSSSD..",
+        "..DSSSSSSD..",
+        "..DSSSSSSD..",
+        "..DSSSSSSD..",
+        "..DDDDDDDD..",
+        ".KKKKKKKKKK.",
+        "KKKKKKKKKKKK"
+    };
+    const int MS = 2;   // cada pixel de la mascota ocupa 2x2
+
+    void Put(int x, int y, int c) { if (x >= 0 && x < W && y >= 0 && y < PH) K[y, x] = c; }
+    void PutBig(int sx, int sy, int c) { for (int dy = 0; dy < MS; dy++) for (int dx = 0; dx < MS; dx++) Put(sx + dx, sy + dy, c); }
+
+    void DrawMascot(double t, double dt)
+    {
+        int mw = 9 * MS, lw = Laptop[0].Length;
+        if (t >= stateEnd)
+        {
+            double roll = rnd.NextDouble();
+            if (mState != 1 && roll < 0.45)
+            {   // se sienta mirando hacia donde hay lugar para la compu
+                mState = 1; stateEnd = t + 5 + rnd.NextDouble() * 4;
+                facing = mx + mw + lw + 2 > W ? -1 : (mx - lw - 2 < 0 ? 1 : (rnd.Next(2) == 0 ? 1 : -1));
+            }
+            else if (roll < 0.6) { mState = 2; stateEnd = t + 1.2 + rnd.NextDouble(); }
+            else
+            {
+                mState = 0; targetX = lw + 2 + rnd.NextDouble() * Math.Max(1, W - mw - 2 * lw - 4);
+                facing = targetX > mx ? 1 : -1; stateEnd = t + 12;
+            }
+        }
+        if (mState == 0)
+        {
+            mx += facing * 9 * dt;
+            if ((facing > 0 && mx >= targetX) || (facing < 0 && mx <= targetX)) { mx = targetX; stateEnd = t; }
+            if (rnd.NextDouble() < dt * 0.25) jumpAt = t;
+        }
+        double jt = t - jumpAt;
+        int lift = jt >= 0 && jt < 0.5 ? (int)Math.Round(7 * Math.Sin(Math.PI * jt / 0.5)) : 0;
+        if (t > nextBlink + 0.13) nextBlink = t + 2 + rnd.NextDouble() * 3;
+        bool blink = t > nextBlink;
+
+        int ox = (int)Math.Round(mx), floor = PH - 1;
+        int top = floor - 5 * MS + 1 - lift;
+        bool step = ((int)(t / 0.14)) % 2 == 0;
+        bool typing = mState == 1;
+        bool armUp = ((int)(t / 0.11)) % 2 == 0;
+
+        for (int r = 0; r < Body.Length; r++)
+            for (int c = 0; c < 9; c++)
+            {
+                char ch = Body[r][c];
+                if (ch == '.') continue;
+                int col = r == 0 ? 15 : (r == 3 ? 16 : 14), ry = r;
+                if (ch == 'e') col = blink ? 14 : 17;
+                if (ch == 'a' && typing && (c == 0) == armUp) ry = r - 1;   // tecleando, los bracitos suben alternados
+                PutBig(ox + c * MS, top + ry * MS, col);
+            }
+        // patas: las 4 quieto, alternadas al caminar
+        int[] legs = { 2, 3, 5, 6 };
+        for (int i = 0; i < 4; i++)
+        {
+            if (mState == 0 && lift == 0 && (i % 2 == 0) == step) continue;
+            PutBig(ox + legs[i] * MS, top + 4 * MS, 16);
+        }
+
+        if (!typing) return;
+        int lx = facing > 0 ? ox + mw + 1 : ox - lw - 1, ly = floor - Laptop.Length + 1, frame = (int)(t / 0.75);
+        for (int r = 0; r < Laptop.Length; r++)
+            for (int c = 0; c < lw; c++)
+            {
+                char ch = Laptop[r][c];
+                if (ch == '.') continue;
+                int col = ch == 'D' ? 19 : (ch == 'K' ? 18 : 20);
+                if (ch == 'S')
+                {   // lineas de codigo que cambian mientras escribe
+                    int line = r - 1, len = (int)(Hash(frame * 7 + line * 13) * 5) + 1, indent = (int)(Hash(line * 31 + frame) * 2);
+                    if (c - 3 >= indent && c - 3 < indent + len) col = 21;
+                }
+                Put(lx + c, ly + r, col);
+            }
+    }
+
     static int Q(double v) { return (int)Math.Round(Math.Max(0, Math.Min(1.3, v)) * 10); }
 }
 '@
 
 # bitmap del nombre: una o mas lineas centradas, separadas por 2 filas vacias
-function Get-NameRows([string[]]$lines) {
+function Get-NameRows([string[]]$lines, $fnt = $Font) {
     $blocks = New-Object Collections.Generic.List[object]
-    foreach ($l in $lines) { $blocks.Add([string[]]@(for ($y = 0; $y -lt 7; $y++) { ($l.ToCharArray() | ForEach-Object { $Font[[string]$_][$y] }) -join '.' })) }
+    foreach ($l in $lines) { $blocks.Add([string[]]@(for ($y = 0; $y -lt $fnt[' '].Count; $y++) { ($l.ToCharArray() | ForEach-Object { $fnt[[string]$_][$y] }) -join '.' })) }
     $w = 0; foreach ($bk in $blocks) { $w = [math]::Max($w, $bk[0].Length) }
     $all = New-Object Collections.Generic.List[string]
     for ($k = 0; $k -lt $blocks.Count; $k++) {
@@ -352,12 +483,13 @@ function Initialize-Led {
     try {
         if (-not ('Aquarium' -as [type])) { Add-Type -TypeDefinition $LedSrc -Language CSharp -ErrorAction Stop }
         $wide = [Console]::WindowWidth -ge 98
-        $script:Led = [Aquarium]::new($CW, 8, $false, (Get-NameRows $(if ($wide) { 'LUCA MENGARELLI' } else { 'LUCA' })), 1, $RST, $BGDEF, $MG)
-        # intro a pantalla completa; el nombre va en dos lineas y al doble si entra
+        # encabezado: nombre arriba y la mascota de claude dando vueltas abajo
+        $script:Led = [Aquarium]::new($CW, 10, $false, (Get-NameRows $(if ($wide) { 'LUCA MENGARELLI' } else { 'LUCA' }) $FontSmall), 1, $RST, $BGDEF, $MG, $true)
+        # intro a pantalla completa; el nombre va en dos lineas y al doble de ancho si entra
         $iw = [Console]::WindowWidth - 4
         $rows = Get-NameRows 'LUCA', 'MENGARELLI'
         $scale = if ($rows[0].Length * 2 -le $iw - 2) { 2 } else { 1 }
-        $script:IntroLed = [Aquarium]::new($iw, [math]::Max(10, [Console]::WindowHeight - 9), $true, $rows, $scale, $RST, $BGDEF, '  ')
+        $script:IntroLed = [Aquarium]::new($iw, [math]::Max(10, [Console]::WindowHeight - 9), $true, $rows, $scale, $RST, $BGDEF, '  ', $false)
     } catch { $script:Led = $null; $script:IntroLed = $null }   # sin compilador c#: arranca sin animacion
     $script:LedClock = [Diagnostics.Stopwatch]::StartNew()
     $script:LedSkip = 0
